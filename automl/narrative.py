@@ -1,13 +1,15 @@
 """Beginner-friendly explanations.
 
-Every decision the engine makes is recorded as a ``Step`` with three parts:
+Every decision the engine makes is recorded as a ``Step``:
 
 * found  - the evidence we saw in the data (with real numbers / column names)
 * why    - why that evidence matters, in plain English
 * action - what we do about it, phrased as "We ..., so that ..."
+* code   - (notebook cells) what the code does, in plain words
 
-All the wording lives in ``TEMPLATES`` so the voice stays consistent and new
-explanations are added in one place.
+The engine's decisions use ``TEMPLATES`` below; each notebook cell's story lives in
+``codegen.py`` next to the code it explains. After a cell runs, its code writes
+"what we found" itself with ``note()``.
 """
 from __future__ import annotations
 
@@ -17,15 +19,16 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Step:
     key: str
-    found: str
-    why: str
-    action: str
+    found: str          # 🔍 what we found before this step (the evidence)
+    why: str            # 💡 why that evidence matters
+    action: str         # 🎯 what we're going to do, "so that ..."
+    code: str = ""      # 🛠 what the code does, in plain words (notebook cells only)
 
     def markdown(self) -> str:
         return (
-            f"🔍 **What we found:** {self.found}  \n"
+            f"🔍 **What we found before:** {self.found}  \n"
             f"💡 **Why it matters:** {self.why}  \n"
-            f"🎯 **What we're doing now:** {self.action}"
+            f"🎯 **What we're going to do:** {self.action}"
         )
 
     def short(self) -> str:
@@ -216,95 +219,6 @@ def story(key: str, **values) -> Step:
     return Step(key, t["found"].format(**values), t["why"].format(**values), t["action"].format(**values))
 
 
-# Fixed explanations for the notebook cells (these don't depend on the data).
-CELL_STORIES: dict[str, Step] = {
-    "setup": Step(
-        "setup",
-        "Your file is already loaded into a table called `df`.",
-        "Every cell below works on this table, step by step - just like a Jupyter notebook.",
-        "We import the libraries we need, so that the later cells can use them.",
-    ),
-    "eda": Step(
-        "eda",
-        "Before modelling we know the column types, but not what the values look like.",
-        "Plots reveal outliers, skew and relationships that summary numbers hide.",
-        "We draw distributions and correlations, so that you can sanity-check the data with your own eyes.",
-    ),
-    "split": Step(
-        "split",
-        "We need a fair way to measure how good the model is.",
-        "Testing a model on the same rows it learned from is like grading a student on questions they've already seen.",
-        "We hide 20% of rows as a **test set**, so that the final score reflects performance on new, unseen data.",
-    ),
-    "split_stratified": Step(
-        "split_stratified",
-        "We need a fair way to measure how good the model is, and the target is a set of classes.",
-        "Testing on training rows is like grading a student on questions they've already seen. A random split could also leave a rare class out of the test set.",
-        "We hide 20% of rows as a **test set**, keeping the same class mix in both parts (stratified split), so that the score is fair for every class.",
-    ),
-    "preprocess": Step(
-        "preprocess",
-        "The columns mix numbers and categories, and some may have gaps.",
-        "Models only understand complete tables of numbers.",
-        "We build one preprocessing recipe (fill gaps → {scale}turn categories into 0/1 columns), so that exactly the same steps run on training and test data.",
-    ),
-    "baseline": Step(
-        "baseline",
-        "A score like 0.80 means nothing on its own.",
-        "We need a reference point: what would a 'dumb' strategy that ignores every input score?",
-        "We score a baseline that always guesses {guess}, so that we can tell whether the real model actually learned something.",
-    ),
-    "insights": Step(
-        "insights",
-        "We know the target, but not yet which columns move it.",
-        "Tables like 'cancellation rate by market segment' are insights a business can act on - and they show what a model should be able to learn.",
-        "We compare the {outcome} across groups of every column and chart the biggest differences, so that the key drivers are visible before any modelling.",
-    ),
-    "compare": Step(
-        "compare",
-        "Models learn in different ways: straight lines (linear), if/else rules (decision tree) or many trees voting (forest / boosting).",
-        "No single kind of model is best for every dataset.",
-        "We score each candidate with 3-fold cross-validation on (a sample of) the training rows, so that the winner is chosen without ever touching the test set.",
-    ),
-    "train": Step(
-        "train",
-        "The comparison picked a winner and we have a baseline to beat.",
-        "This is the step where the model learns patterns from all training rows.",
-        "We retrain the winning model on every training row and score it on training and test rows, so that we can also spot overfitting (great on train, poor on test).",
-    ),
-    "threshold": Step(
-        "threshold",
-        "By default a model only says `{pos}` when it is more than 50% sure.",
-        "50% is arbitrary. A lower threshold catches more `{pos}` cases (higher recall) but raises more false alarms (lower precision).",
-        "We pick the threshold with the best F1 for `{pos}` from cross-validated predictions on training rows, so that the test set stays untouched for the final check.",
-    ),
-    "explain": Step(
-        "explain",
-        "We have a trained model, but not yet *why* it predicts what it does.",
-        "Knowing which columns matter builds trust and often teaches you something about the problem.",
-        "We shuffle one column at a time and measure how much the test score drops (permutation importance), so that we see which inputs the model relies on.",
-    ),
-    "cluster_prep": Step(
-        "cluster_prep",
-        "Clustering measures how 'far apart' rows are.",
-        "If one column is in thousands and another in fractions, the big one would dominate the distance.",
-        "We fill gaps, scale every column to the same range and turn categories into 0/1 columns, so that every feature has a fair say.",
-    ),
-    "choose_k": Step(
-        "choose_k",
-        "We don't know in advance how many groups the data contains.",
-        "Picking the number of clusters (k) by hand is guesswork.",
-        "We try k = {k_min}…{k_max} and keep the one with the best **silhouette score**, so that the groups are as distinct as possible.",
-    ),
-    "cluster_fit": Step(
-        "cluster_fit",
-        "We now know a good number of clusters.",
-        "Groups are only useful if we can see and describe them.",
-        "We fit the final model, draw the clusters in 2-D (PCA) and compare the average of each column per cluster, so that you can tell what makes each group different.",
-    ),
-}
-
-
 GLOSSARY: dict[str, str] = {
     "Feature": "An input column the model uses to make a prediction.",
     "Target": "The column we want to predict (the 'answer').",
@@ -323,7 +237,29 @@ GLOSSARY: dict[str, str] = {
     "Scaling": "Rescaling numeric columns to a similar range so no column dominates just because its numbers are bigger.",
     "Imputation": "Filling in missing values with a sensible guess, e.g. the median.",
     "Permutation importance": "How much the score drops when one column is randomly shuffled. A big drop means the model relies on that column.",
-    "PCA": "A way to squash many columns into 2 so the data can be drawn on a flat chart.",
+    "PCA": "Principal Component Analysis: new axes that capture the most variation, so many columns can be summarised (and drawn) with a few.",
+    "Cross-validation": "Splitting the training data into k parts and letting each part be the 'test' once, so a score doesn't depend on one lucky split.",
+    "Hyperparameter": "A setting chosen before training (tree depth, learning rate). Tuned with cross-validation, never on the test set.",
+    "Data leakage": "When information from the test set (or the answer) sneaks into training, making scores look better than reality.",
+    "OLS": "Ordinary Least Squares: linear regression that picks the line with the smallest squared errors. y = β₀ + β₁x₁ + …",
+    "Coefficient (β)": "How much the target changes when one input rises by 1 unit, holding the others fixed. β₀ is the intercept (constant).",
+    "p-value": "How surprising an effect would be if the true effect were zero. p < 0.05 is the usual bar for 'statistically significant'.",
+    "Confidence interval": "The range that contains the true value 95% of the time. If it excludes 0, the effect is significant.",
+    "Adjusted R²": "R² with a penalty for each extra input, so adding useless columns can't make it look better.",
+    "F-statistic": "Tests whether all inputs together explain the target better than no inputs at all.",
+    "VIF": "Variance Inflation Factor: how much a column is just a copy of the others. Above 10 = serious multicollinearity.",
+    "Homoscedasticity": "The errors have the same spread for small and large predictions. Its opposite (a funnel shape) makes p-values unreliable.",
+    "Residual": "Actual value minus predicted value: the error on one row.",
+    "Odds ratio": "In logistic regression: how many times the odds of the outcome are multiplied when an input rises by 1 (1 = no effect).",
+    "ROC-AUC": "The chance that the model ranks a random positive row above a random negative one. 0.5 = coin flip, 1 = perfect.",
+    "Precision / Recall": "Precision: of the rows flagged, how many were right. Recall: of the true cases, how many were caught.",
+    "Gini impurity": "How mixed the classes are in a tree node: 0 = all one class (pure).",
+    "Bagging": "Training many models on random bootstrap samples and averaging them (random forest). Reduces variance / overfitting.",
+    "Boosting": "Training models one after another, each focusing on the previous one's mistakes (AdaBoost, gradient boosting).",
+    "Out-of-bag score": "A random forest's free validation score: each tree is tested on the rows its bootstrap sample left out.",
+    "Elbow method": "Plotting inertia against k and picking the k where adding more clusters stops helping much.",
+    "Inertia": "Total squared distance from each row to its cluster centre (lower = tighter clusters).",
+    "Dendrogram": "A tree diagram of hierarchical clustering: how groups merge, and at what distance.",
 }
 
 
@@ -340,7 +276,13 @@ def interpret(metrics: dict, target: str | None) -> list[str]:
         out.append(f"The data splits best into **{k} groups**, with a silhouette score of **{sil:.2f}** - that is **{strength}** separation.")
         if strength == "weak":
             out.append("Weak separation means the groups overlap a lot; treat them as rough tendencies rather than clear-cut types.")
-        out.append("Look at the per-cluster averages table to describe each group in your own words.")
+        if "pca_n80" in metrics:
+            out.append(f"PCA: {metrics['pca_n80']} principal component(s) hold 80% of the information.")
+        if "cluster_agreement" in metrics:
+            agree = metrics["cluster_agreement"]
+            out.append(f"Hierarchical clustering agrees with K-Means at **{agree:.2f}** (adjusted Rand), so the segments are "
+                       + ("**robust**." if agree > 0.6 else "**soft**: treat them as tendencies."))
+        out.append("Use the cluster profiles above to name each group in business terms.")
         return out
 
     name = metrics.get("metric_name")
@@ -374,6 +316,23 @@ def interpret(metrics: dict, target: str | None) -> list[str]:
         out.append(f"⚠️ Training score ({train:.2f}) is much higher than test score ({test:.2f}) - a sign of **overfitting**. More data or a simpler model would help.")
     elif train is not None:
         out.append(f"Training ({train:.2f}) and test ({test:.2f}) scores are close, so the model **generalises** well to new rows.")
+
+    if "tuned_settings" in metrics:
+        out.append(f"Tuning (RandomizedSearchCV) set " + ", ".join(f"`{k}={v}`" for k, v in metrics["tuned_settings"].items())
+                   + f", giving a cross-validated score of {metrics['tuned_cv']:.3f}.")
+    if "roc_auc" in metrics:
+        out.append(f"ROC-AUC = **{metrics['roc_auc']:.3f}**: the model separates the two classes "
+                   + ("very well." if metrics["roc_auc"] >= 0.9 else "reasonably." if metrics["roc_auc"] >= 0.75 else "only weakly."))
+    if "ols_r2" in metrics:
+        out.append(f"OLS (the explainable straight-line model): R² {metrics['ols_r2']:.2f}, adjusted {metrics['ols_adj_r2']:.2f}, with "
+                   f"{metrics['ols_significant']} of {metrics['ols_inputs']} inputs significant (p < 0.05).")
+    failed = [name.split(" (")[0] for name, ok in metrics.get("assumptions", {}).items() if not ok]
+    if "assumptions" in metrics:
+        out.append("All regression assumptions look fine, so the p-values and intervals can be trusted." if not failed else
+                   "Regression assumptions to keep in mind: " + ", ".join(failed) + ". Read the OLS p-values with some caution.")
+    if "logit_pseudo_r2" in metrics:
+        out.append(f"Logistic regression (the explainable model) reaches pseudo R² {metrics['logit_pseudo_r2']:.2f}. Its odds ratios "
+                   "show the direction and size of each driver.")
 
     unseen = metrics.get("test_score_unseen")
     if unseen is not None:

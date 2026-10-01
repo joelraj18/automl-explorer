@@ -1,6 +1,5 @@
 -r requirements.txt
 pytest>=8
 # to rebuild examples/inn_hotels/INNHotels_cancellation_prediction.ipynb
-statsmodels>=0.14
 nbclient>=0.10
 ipykernel>=6

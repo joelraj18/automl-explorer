@@ -4,7 +4,7 @@
 
 | File | What it is |
 |---|---|
-| `INNHotels_cancellation_prediction.ipynb` | **The final project notebook**, already run so the outputs are saved |
+| `INNHotels_cancellation_prediction.ipynb` | **The final project notebook**, already run so the outputs are saved. Every step explains 🔍 what we found before, 💡 why it matters, 🎯 what we're going to do and 🛠 what the code does. After the code runs, 📌 says what we found, computed from the output. |
 | `build_notebook.py` | Generates the notebook and runs it: `python examples/inn_hotels/build_notebook.py` (needs `requirements-dev.txt`) |
 | `INNHotelsGroup.csv` | The data |
 
@@ -24,7 +24,7 @@
 The AutoML Explorer app now handles this file on its own:
 - it pre-selects `booking_status` as the target
 - it flags the look-alike rows and builds the weekday from the split date columns
-- it compares logistic regression, a decision tree and a random forest
-- it tunes the threshold
+- it compares five model types (logistic regression, a decision tree, a random forest, AdaBoost and gradient boosting), tunes the winner, and tunes the threshold
+- it explains the drivers with statsmodels odds ratios
 
 `tests/test_inn_hotels.py` checks all of this.

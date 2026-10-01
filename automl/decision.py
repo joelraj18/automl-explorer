@@ -26,7 +26,7 @@ MAX_MISSING_COLUMN = 0.4       # drop a column if more than this share is empty
 MAX_CLASSES_AS_LABEL = 15      # numeric target with <= this many values -> classification
 SMALL_DATA = 1_000
 LARGE_DATA = 100_000
-TRAIN_SAMPLE = {"tree": 50_000, "hgb": 200_000, "linear": 200_000}
+TRAIN_SAMPLE = {"tree": 50_000, "hgb": 100_000, "linear": 100_000, "boost": 100_000}
 CLUSTER_SAMPLE = 100_000
 TEST_SIZE = 0.2
 
@@ -34,13 +34,15 @@ TEST_SIZE = 0.2
 MODELS: dict[str, tuple[str, str, str]] = {
     "LogisticRegression": ("from sklearn.linear_model import LogisticRegression", "LogisticRegression(max_iter=1000{cw})", "linear"),
     "DecisionTreeClassifier": ("from sklearn.tree import DecisionTreeClassifier", "DecisionTreeClassifier(max_depth=8, min_samples_leaf=20, random_state=42{cw})", "tree"),
-    "RandomForestClassifier": ("from sklearn.ensemble import RandomForestClassifier", "RandomForestClassifier(n_estimators=200, min_samples_leaf=2, n_jobs=-1, random_state=42{cw})", "tree"),
+    "RandomForestClassifier": ("from sklearn.ensemble import RandomForestClassifier", "RandomForestClassifier(n_estimators=200, min_samples_leaf=2, oob_score=True, n_jobs=-1, random_state=42{cw})", "tree"),
+    "AdaBoostClassifier": ("from sklearn.ensemble import AdaBoostClassifier", "AdaBoostClassifier(n_estimators=100, random_state=42)", "boost"),
     "HistGradientBoostingClassifier": ("from sklearn.ensemble import HistGradientBoostingClassifier", "HistGradientBoostingClassifier(random_state=42{cw})", "hgb"),
     "LinearRegression": ("from sklearn.linear_model import LinearRegression", "LinearRegression()", "linear"),
     "RidgeCV": ("from sklearn.linear_model import RidgeCV", "RidgeCV(alphas=np.logspace(-3, 3, 13))", "linear"),
     "LassoCV": ("from sklearn.linear_model import LassoCV", "LassoCV(cv=5, random_state=42)", "linear"),
     "DecisionTreeRegressor": ("from sklearn.tree import DecisionTreeRegressor", "DecisionTreeRegressor(max_depth=8, min_samples_leaf=20, random_state=42)", "tree"),
-    "RandomForestRegressor": ("from sklearn.ensemble import RandomForestRegressor", "RandomForestRegressor(n_estimators=200, min_samples_leaf=2, n_jobs=-1, random_state=42)", "tree"),
+    "RandomForestRegressor": ("from sklearn.ensemble import RandomForestRegressor", "RandomForestRegressor(n_estimators=200, min_samples_leaf=2, oob_score=True, n_jobs=-1, random_state=42)", "tree"),
+    "AdaBoostRegressor": ("from sklearn.ensemble import AdaBoostRegressor", "AdaBoostRegressor(n_estimators=100, random_state=42)", "boost"),
     "HistGradientBoostingRegressor": ("from sklearn.ensemble import HistGradientBoostingRegressor", "HistGradientBoostingRegressor(random_state=42)", "hgb"),
     "KMeans": ("from sklearn.cluster import KMeans", "KMeans(n_clusters=k, n_init=10, random_state=42)", "cluster"),
     "MiniBatchKMeans": ("from sklearn.cluster import MiniBatchKMeans", "MiniBatchKMeans(n_clusters=k, n_init=3, batch_size=2048, random_state=42)", "cluster"),
@@ -239,8 +241,7 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
             d.model = "HistGradientBoostingRegressor"
             d.steps.append(story("model_large", rows=rows, model=d.model))
         linear = d.model if d.family == "linear" else "LinearRegression"
-        ensemble = "HistGradientBoostingRegressor" if rows > LARGE_DATA else "RandomForestRegressor"
-        d.candidates = [linear, "DecisionTreeRegressor", ensemble]
+        d.candidates = [linear, "DecisionTreeRegressor", "RandomForestRegressor", "AdaBoostRegressor", "HistGradientBoostingRegressor"]
     else:
         # B2: classification
         d.task = "classification"
@@ -281,8 +282,8 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
         else:
             d.model = "HistGradientBoostingClassifier"
             d.steps.append(story("model_large", rows=rows, model=d.model))
-        ensemble = "HistGradientBoostingClassifier" if rows > LARGE_DATA else "RandomForestClassifier"
-        d.candidates = ["LogisticRegression", "DecisionTreeClassifier", ensemble]
+        d.candidates = ["LogisticRegression", "DecisionTreeClassifier", "RandomForestClassifier",
+                        "AdaBoostClassifier", "HistGradientBoostingClassifier"]
 
     d.steps.append(story("compare_models", rule_model=d.model, names=", ".join(d.candidates)))
 

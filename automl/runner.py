@@ -23,6 +23,7 @@ class CellResult:
     cell_id: str
     stdout: str = ""
     figures: list[bytes] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # 📌 "what we found" lines written by the cell's note() calls
     error: str | None = None
     seconds: float = 0.0
     skipped: bool = False
@@ -71,6 +72,7 @@ def _run_one(cell: Cell, ns: dict, shown: list[bytes]) -> CellResult:
     res = CellResult(cell.id)
     out = io.StringIO()
     shown.clear()
+    ns["note"] = res.notes.append  # the setup cell defines note() for Jupyter; in the app we collect the notes instead
     start = time.perf_counter()
     try:
         with contextlib.redirect_stdout(out), warnings.catch_warnings():

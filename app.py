@@ -137,7 +137,8 @@ if run and run["key"] != run_key:
 
 st.subheader("3. The generated notebook")
 if beginner:
-    st.caption("Each cell below does one job. Read the explanation, look at the code, then press **Run pipeline** to see the output appear under every cell.")
+    st.caption("Each cell below does one job and explains itself in five parts: 🔍 what we found before, 💡 why it matters, "
+               "🎯 what we're going to do, 🛠 what the code does, and, after you press **Run pipeline**, 📌 what we found.")
 
 b1, b2 = st.columns([1, 4])
 if b1.button("▶ Run pipeline", type="primary"):
@@ -159,8 +160,11 @@ for i, cell in enumerate(cells):
     if beginner:
         with st.container(border=True):
             st.markdown(cell.story.markdown())
+        st.markdown(f"🛠 **What this code does:** {cell.story.code}")
     st.code(cell.code, language="python")
     if not run:
+        if beginner and i == 0:
+            st.caption("📌 *What we found after running* appears under each cell once you press **Run pipeline**.")
         continue
     res = run["results"][i]
     if res.skipped:
@@ -170,6 +174,11 @@ for i, cell in enumerate(cells):
         st.code(res.stdout, language="text")
     for img in res.figures:
         st.image(img)
+    if res.notes:
+        with st.container(border=True):
+            st.markdown("📌 **What we found after running this:**")
+            for line in res.notes:
+                st.markdown(f"- {line}")
     if res.error:
         st.error(f"This cell failed: {res.error}")
         if beginner:

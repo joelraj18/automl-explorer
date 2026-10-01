@@ -61,7 +61,7 @@ def test_large_data_is_sampled_and_uses_fast_model():
     df = pd.DataFrame({"x": rng.random(n), "y": rng.random(n) * 100})
     d = run(df, "y")
     assert d.model == "HistGradientBoostingRegressor"
-    assert "sampled" not in keys(d)  # 120k < 200k limit for gradient boosting
+    assert d.sample_rows == 100_000 and "sampled" in keys(d)  # 5 candidate models are compared, so cap the rows
     d = run(pd.DataFrame({"x": rng.random(60_000), "y": rng.random(60_000) * 100}), "y")
     assert d.model == "RandomForestRegressor" and d.sample_rows == 50_000
 

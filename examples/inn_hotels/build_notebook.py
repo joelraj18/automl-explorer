@@ -29,7 +29,12 @@ def code(text: str) -> None:
 
 
 def story(title: str, found: str, why: str, doing: str) -> None:
-    md(f"## {title}\n\n🔍 **What we found:** {found}  \n💡 **Why it matters:** {why}  \n🎯 **What we're doing now:** {doing}")
+    md(f"## {title}\n\n🔍 **What we found before:** {found}  \n💡 **Why it matters:** {why}  \n🎯 **What we're going to do:** {doing}")
+
+
+def explain(text: str) -> None:
+    """A short 'what this code does' note placed right above a code cell."""
+    md(f"🛠 **What this code does:** {text}")
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -43,13 +48,13 @@ in advance which bookings are likely to be cancelled**, **understand why**, and 
 **Objective.** Use the booking data to (1) find what drives cancellations, (2) build a model that predicts them,
 and (3) recommend actions.
 
-**How to read this notebook.** Every section starts with three lines:
+**How to read this notebook.** Every step is explained in five parts:
 
-- 🔍 **What we found**: the evidence that led to this step
+- 🔍 **What we found before**: the evidence that led to this step
 - 💡 **Why it matters**: why that evidence changes what we do
-- 🎯 **What we're doing now**: the action, and what it achieves
-
-Every *Observations* block is **printed by code from the actual numbers**, so the text can never contradict the output.
+- 🎯 **What we're going to do**: the action, and what it achieves
+- 🛠 **What this code does**: the code below, in plain words
+- 📌 **What we found after running this**: written *by the code* from the actual numbers, so the text can never contradict the output
 
 | Column | Meaning |
 |---|---|
@@ -69,6 +74,7 @@ Every *Observations* block is **printed by code from the actual numbers**, so th
 | `booking_status` | **target**: Canceled / Not_Canceled |
 """)
 
+explain('Imports the libraries: pandas and numpy for tables and maths, matplotlib and seaborn for charts, statsmodels for statistical tests, and scikit-learn for models. It fixes a random seed so results repeat, and defines `say()`, which shows a finding as formatted text.')
 code(r'''
 import calendar
 import warnings
@@ -105,6 +111,7 @@ def say(text):
     display(Markdown(text))
 ''')
 
+explain('Reads the CSV into a table called `raw` and shows the first 5 rows.')
 code(r'''
 raw = pd.read_csv("INNHotelsGroup.csv")
 print(f"{raw.shape[0]:,} bookings x {raw.shape[1]} columns")
@@ -118,6 +125,7 @@ story(
     "Before cleaning or modelling we need to know the types, the gaps and any hidden quality problems.",
     "We list every column's type, number of distinct values and missing values. We also check for duplicates and impossible dates.",
 )
+explain("Lists each column's type, number of distinct values and missing values. It counts duplicate rows twice, once with the ID and once without it, and turns year/month/day into real dates to catch impossible ones.")
 code(r'''
 overview = pd.DataFrame({
     "type": raw.dtypes.astype(str),
@@ -133,7 +141,7 @@ date_parts = raw[["arrival_year", "arrival_month", "arrival_date"]].set_axis(["y
 arrival = pd.to_datetime(date_parts, errors="coerce")
 bad_dates = date_parts[arrival.isna()].value_counts()
 
-say(f"""**Observations**
+say(f"""📌 **What we found after running this**
 - No column has missing values. {raw.select_dtypes(exclude="number").shape[1]} columns are text (including the target).
 - `Booking_ID` is unique for every row, so it is an identifier, not information. We drop it.
 - Exact duplicate rows: **{exact_duplicates}**. That is only because the ID is unique: **ignoring the ID, {lookalikes:,} rows
@@ -150,6 +158,7 @@ story(
     "Extreme typos distort averages and plots, and impossible dates break date calculations.",
     "We fix only what is clearly an error, and record every change. We work on a copy, so `raw` stays untouched.",
 )
+explain('Makes a working copy `df` without the ID. It caps clear typos (more than 3 children, a price over €500), moves 29 Feb 2018 back one day, adds the weekday, and turns the target into 1 = Canceled, 0 = not.')
 code(r'''
 df = raw.drop(columns="Booking_ID").copy()
 
@@ -172,7 +181,7 @@ df["arrival_weekday"] = arrival_fixed.dt.dayofweek  # 0 = Monday ... 6 = Sunday
 df["booking_status"] = (df["booking_status"] == "Canceled").astype(int)
 
 free = df[df["avg_price_per_room"] == 0]["market_segment_type"].value_counts()
-say(f"""**Observations**
+say(f"""📌 **What we found after running this**
 - Capped **{n_many_children}** bookings with more than 3 children, and **{n_price_outliers}** price above €500 (set to €{upper_whisker:.2f}).
 - Moved **{arrival.isna().sum()}** impossible dates back one day, and added `arrival_weekday`.
 - **{len(free)} segments** have rooms at €0: {", ".join(f"{s} ({n})" for s, n in free.items())}. Complimentary stays are free by
@@ -188,6 +197,7 @@ story(
     "Distributions show skew, outliers and rare categories, which affect how we model and what we recommend.",
     "We plot the two continuous columns in detail and every other column as a percentage bar chart.",
 )
+explain('For the two continuous columns, draws a histogram with the mean (red) and median (black) marked, and a box plot underneath to show outliers.')
 code(r'''
 fig, axes = plt.subplots(2, 2, figsize=(14, 6), gridspec_kw={"height_ratios": [3, 1]}, sharex="col")
 for i, col in enumerate(["lead_time", "avg_price_per_room"]):
@@ -198,6 +208,7 @@ for i, col in enumerate(["lead_time", "avg_price_per_room"]):
     sns.boxplot(x=df[col], ax=axes[1, i], color=BLUE)
 plt.tight_layout(); plt.show()
 ''')
+explain("`pct_bar()` draws the % of bookings for each value of a column, and is applied to 12 columns in a grid (week nights above 10 are grouped as '10').")
 code(r'''
 def pct_bar(series, ax, title):
     share = series.value_counts(normalize=True)
@@ -221,12 +232,13 @@ for ax, (title, series) in zip(axes.ravel(), columns.items()):
     pct_bar(series, ax, title)
 plt.tight_layout(); plt.show()
 ''')
+explain('Computes the shares quoted below directly from the data, so the text can never drift from the charts.')
 code(r'''
 share = lambda col, value: (df[col] == value).mean()
 nights = df["no_of_week_nights"].value_counts(normalize=True).head(3)
 month_share = df["arrival_month"].value_counts(normalize=True)
 segments = df["market_segment_type"].value_counts(normalize=True)
-say(f"""**Observations**
+say(f"""📌 **What we found after running this**
 - **Lead time** is right-skewed: median {df.lead_time.median():.0f} days, mean {df.lead_time.mean():.0f}, max {df.lead_time.max()}.
   A few bookings are made more than a year ahead.
 - **Price**: median €{df.avg_price_per_room.median():.0f} per night; the €0 stays are the complimentary rooms.
@@ -249,6 +261,7 @@ story(
     "Cancellation rates by group are the most actionable output of the whole project. They also show what a model should be able to learn.",
     "We compute the cancellation rate for every group of every important column, and compare it with the overall rate (the dashed line).",
 )
+explain("Draws a correlation heatmap of all numeric columns (+1 = move together, −1 = opposite), then lists each column's correlation with `booking_status` (positive = more cancellations).")
 code(r'''
 num_cols = df.select_dtypes("number").columns
 corr = df[num_cols].corr()
@@ -258,6 +271,7 @@ plt.title("Correlation between numeric columns"); plt.tight_layout(); plt.show()
 print("Correlation with booking_status (1 = canceled):")
 print(corr["booking_status"].drop("booking_status").sort_values(ascending=False).round(3).to_string())
 ''')
+explain('Adds `total_nights` and `total_guests` and cuts lead time into bands. `cancel_rate()` computes the cancellation rate per group, hiding groups under 30 bookings. Each chart colours groups above the overall rate (dashed line) red and groups below it blue.')
 code(r'''
 overall = df["booking_status"].mean()
 df["total_nights"] = df["no_of_week_nights"] + df["no_of_weekend_nights"]
@@ -293,11 +307,12 @@ for ax, (title, table) in zip(axes.ravel(), drivers.items()):
 plt.suptitle(f"Cancellation rate by group (dashed line = overall {overall:.1%})", y=1.0)
 plt.tight_layout(); plt.show()
 ''')
+explain('Reads the exact rates from the tables above and writes them into the observations.')
 code(r'''
 rate = lambda name, group: drivers[name].loc[group, "rate"]
 seg, lead, req, month = drivers["market segment"], drivers["lead time (days)"], drivers["special requests"], drivers["arrival month"]
 nights = drivers["total nights (10 = 10+)"]
-say(f"""**Observations** (overall cancellation rate {overall:.1%})
+say(f"""📌 **What we found after running this** (overall cancellation rate {overall:.1%})
 - **Lead time is the strongest driver.** {rate('lead time (days)', '0-30'):.0%} of bookings made within 30 days are cancelled,
   compared with **{rate('lead time (days)', '152-250'):.0%}** at 152-250 days and **{rate('lead time (days)', '251+'):.0%}** beyond 250 days.
 - **Special requests signal commitment.** Bookings with no request cancel **{rate('special requests', 0):.0%}** of the time, with 1 request
@@ -316,6 +331,7 @@ say(f"""**Observations** (overall cancellation rate {overall:.1%})
   so treat this year effect with care.
 """)
 ''')
+explain('Box plots of the price per night by market segment and by arrival month, plus the median prices quoted below.')
 code(r'''
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 sns.boxplot(data=df, x="market_segment_type", y="avg_price_per_room", ax=axes[0], color=BLUE)
@@ -327,7 +343,7 @@ plt.tight_layout(); plt.show()
 price_seg = df.groupby("market_segment_type")["avg_price_per_room"].median().sort_values(ascending=False)
 price_month = df.groupby("arrival_month")["avg_price_per_room"].median().sort_values(ascending=False)
 price_status = df.groupby("booking_status")["avg_price_per_room"].median()
-say(f"""**Observations**
+say(f"""📌 **What we found after running this**
 - Median price by segment: {", ".join(f"{s} €{p:.0f}" for s, p in price_seg.items())}. Online guests pay the most and also cancel the most.
 - The most expensive arrival months are {", ".join(MONTH[m] for m in price_month.index[:3])}, and the cheapest are {", ".join(MONTH[m] for m in price_month.index[-3:])}.
 - Cancelled bookings were priced higher (median €{price_status[1]:.0f} vs €{price_status[0]:.0f}).
@@ -342,6 +358,7 @@ story(
     "Tree models get both the totals and the parts. Logistic regression gets only the parts, and compares each category with the "
     "*most common* one (e.g. every segment vs Online), so the effects are easy to read. We check VIF to confirm the problem is gone.",
 )
+explain('One-hot encodes the categories (one 0/1 column each). `tree_cols` keeps everything for the tree models. `linear_cols` drops the totals and the most common category of each column (the reference) for logistic regression. `vif()` computes the Variance Inflation Factor of a set of columns.')
 code(r'''
 categorical = ["type_of_meal_plan", "room_type_reserved", "market_segment_type"]
 features = [c for c in df.columns if c != "booking_status"]
@@ -366,7 +383,7 @@ print("Highest VIF with the totals included (one-hot columns left out here, to i
 print(vif_all.sort_values(ascending=False).head(6).map("{:,.0f}".format).to_string())
 print("\nHighest VIF in the logistic-regression feature set:")
 print(vif_linear.sort_values(ascending=False).head(6).round(2).to_string())
-say(f"""**Observations**
+say(f"""📌 **What we found after running this**
 - With the totals included, **{(vif_all > 1000).sum()} columns have VIF above 1,000** (effectively infinite): perfect collinearity.
   This is what broke the original logistic regression.
 - In the logistic-regression set (reference categories: {", ".join(f"{c} = {r}" for c, r in reference.items())}) the largest VIF is
@@ -383,6 +400,7 @@ story(
     "We hold out 30% of rows as a test set (stratified, same seed as before) and flag the test rows with no twin in training. "
     "**F1 for the Canceled class** is our main score; it rewards catching cancellations without too many false alarms.",
 )
+explain("Splits the rows 70/30, keeping the same class mix in both parts (stratified). `row_key` fingerprints each booking's details, so `unseen` marks test rows with no identical twin in training. The baseline predicts 'not cancelled' for everyone.")
 code(r'''
 X_train, X_test, y_train, y_test = train_test_split(X_all, y, test_size=0.30, stratify=y, random_state=RANDOM_STATE)
 
@@ -390,7 +408,7 @@ row_key = pd.util.hash_pandas_object(X_all, index=False)  # one fingerprint per 
 unseen = ~row_key.loc[X_test.index].isin(set(row_key.loc[X_train.index])).to_numpy()
 
 baseline_pred = np.zeros(len(y_test), dtype=int)  # "nobody cancels"
-say(f"""**Observations**
+say(f"""📌 **What we found after running this**
 - Training rows: **{len(X_train):,}**, test rows: **{len(X_test):,}**. The cancellation rate is {y_train.mean():.1%} in training and {y_test.mean():.1%} in test.
 - **{(~unseen).mean():.0%} of test rows have an identical twin in training.** The remaining {unseen.mean():.0%} ("unseen rows") are
   the fairest test of how the model will do on genuinely new bookings.
@@ -398,6 +416,7 @@ say(f"""**Observations**
   It never catches a single cancellation. Every model below must beat this.
 """)
 ''')
+explain('Two helpers used by every model. `best_threshold()` picks the probability cut-off with the best F1 for Canceled. `evaluate()` gets out-of-fold predictions with 5-fold cross-validation on the training set and chooses the threshold from them. It then refits on all training rows and scores once on the test set, on all rows and on unseen rows. It also draws the confusion matrix and stores a row in `results`.')
 code(r'''
 results = []
 
@@ -444,6 +463,7 @@ story(
     "We show the failure, remove that one dummy (complimentary stays are handled by a simple rule: they don't cancel), "
     "then drop insignificant variables one at a time (p > 0.05) until the model is clean.",
 )
+explain('First fits logistic regression on every linear column, to show the separation problem. Then it removes the Complementary dummy and drops the least significant column (highest p-value) one at a time until every p < 0.05, and prints the final coefficients.')
 code(r'''
 first = sm.Logit(y_train, sm.add_constant(X_train[linear_cols].astype(float))).fit(disp=False, maxiter=200)
 print(f"All features    -> converged: {first.mle_retvals['converged']}, "
@@ -465,6 +485,7 @@ print(f"Final model     -> converged: {logit.mle_retvals['converged']}, {len(lr_
 print("Dropped as not significant:", ", ".join(dropped) or "none")
 print(logit.summary2().tables[1][["Coef.", "P>|z|"]].round(3).to_string())
 ''')
+explain('Turns the coefficients into odds ratios (e^β) and % changes in the odds, and charts the 15 largest. Then it writes plain-English sentences for the key drivers, using 30-day and €10 steps where 1 unit would be too small to read.')
 code(r'''
 odds = pd.DataFrame({"coefficient": logit.params.drop("const")})
 odds["odds ratio"] = np.exp(odds["coefficient"])
@@ -487,14 +508,25 @@ for feat in ["no_of_special_requests", "required_car_parking_space", "repeated_g
         unit = f"{step} more days" if feat == "lead_time" else f"€{step} more per night" if feat == "avg_price_per_room" else \
                "each extra request" if feat == "no_of_special_requests" else f"vs {reference['market_segment_type']} bookings" if "_type_" in feat else "yes vs no"
         lines.append(f"- `{feat}`: {unit} → odds of cancelling **{change:+.0f}%**")
-say("**Interpretation** (holding all other columns fixed)\n" + "\n".join(lines))
+say("📌 **What we found after running this** (each effect holds all other columns fixed)\n" + "\n".join(lines))
 ''')
+explain('Scores the same logistic regression with scikit-learn (a pipeline that scales the columns first), at the default 0.50 threshold and at the threshold tuned on the training folds.')
 code(r'''
 lr_model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000, C=1e6))  # ~unpenalised, same as statsmodels
 print("Logistic regression, default threshold 0.50")
 evaluate("Logistic regression (0.50)", lr_model, lr_cols, tune_threshold=False)
 print("\nLogistic regression, threshold tuned on training folds")
 lr = evaluate("Logistic regression (tuned threshold)", lr_model, lr_cols)
+
+r = {row["model"]: row for row in results}
+lr_default, lr_tuned = r["Logistic regression (0.50)"], r["Logistic regression (tuned threshold)"]
+say(f"""📌 **What we found after running this**
+- At 0.50 the model catches {lr_default['test recall']:.0%} of cancellations. With the threshold tuned on training folds ({lr_tuned['threshold']:.2f})
+  it catches **{lr_tuned['test recall']:.0%}**, while precision moves {lr_default['test precision']:.0%} → {lr_tuned['test precision']:.0%}.
+- Test F1 {lr_default['test F1']:.3f} → **{lr_tuned['test F1']:.3f}**, ROC-AUC {lr_tuned['test ROC-AUC']:.3f}. Train, CV and test F1 are close,
+  so there is no overfitting. But a straight-line model can't capture combinations such as "long lead time *and* online",
+  so we try trees next.
+""")
 ''')
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -506,10 +538,18 @@ story(
     "We show the overfit default tree. Then we choose both kinds of pruning with **5-fold cross-validation on the training set only**, "
     "so the test set is used exactly once, at the end.",
 )
+explain('Trains an unrestricted tree (no depth limit) and scores it at 0.50, to show what overfitting looks like.')
 code(r'''
 default_tree = evaluate("Decision tree (default)", DecisionTreeClassifier(random_state=RANDOM_STATE), tree_cols, tune_threshold=False)
 print(f"\ndepth {default_tree.get_depth()}, {default_tree.get_n_leaves():,} leaves")
+row = results[-1]
+say(f"""📌 **What we found after running this**
+- Train F1 **{row['train F1']:.2f}** vs test F1 **{row['test F1']:.2f}**. With {default_tree.get_n_leaves():,} leaves the tree has
+  memorised the training rows (overfitting).
+- On test rows with no twin in training it drops to **{row['test F1 (unseen rows)']:.2f}**: the duplicates flatter memorising models most.
+""")
 ''')
+explain('`GridSearchCV` tries 48 combinations of depth, minimum leaf size and class weighting with 5-fold cross-validation, keeps the best by F1, and evaluates it.')
 code(r'''
 pre_search = GridSearchCV(
     DecisionTreeClassifier(random_state=RANDOM_STATE),
@@ -520,6 +560,7 @@ print("Best pre-pruning settings (by CV F1):", pre_search.best_params_, f"CV F1 
 pre_tree = evaluate("Decision tree (pre-pruned, CV)", pre_search.best_estimator_, tree_cols)
 print(f"\ndepth {pre_tree.get_depth()}, {pre_tree.get_n_leaves():,} leaves")
 ''')
+explain('Computes the cost-complexity pruning path (every alpha at which a branch would be cut). It tests 40 of those alphas with 5-fold cross-validation, plots the CV F1 against alpha, and evaluates the tree with the best alpha.')
 code(r'''
 path = DecisionTreeClassifier(random_state=RANDOM_STATE).cost_complexity_pruning_path(X_train[tree_cols], y_train)
 alphas = np.unique(np.quantile(path.ccp_alphas[:-1], np.linspace(0.5, 0.995, 40)))  # 40 candidates, not all ~1,400
@@ -536,7 +577,18 @@ plt.tight_layout(); plt.show()
 
 post_tree = evaluate("Decision tree (post-pruned, CV)", DecisionTreeClassifier(random_state=RANDOM_STATE, ccp_alpha=best_alpha), tree_cols)
 print(f"\ndepth {post_tree.get_depth()}, {post_tree.get_n_leaves():,} leaves")
+
+r = {row["model"]: row for row in results}
+default, pre, post = r["Decision tree (default)"], r["Decision tree (pre-pruned, CV)"], r["Decision tree (post-pruned, CV)"]
+say(f"""📌 **What we found after running this**
+- Pre-pruning (CV chose {", ".join(f"`{k}={v}`" for k, v in pre_search.best_params_.items())}): test F1 **{pre['test F1']:.3f}**
+  with {pre_tree.get_n_leaves():,} leaves.
+- Post-pruning (alpha {best_alpha:.6f}): test F1 **{post['test F1']:.3f}** with only **{post_tree.get_n_leaves():,} leaves**.
+- The train-test gap shrinks from {default['train F1'] - default['test F1']:.2f} (default tree) to {post['train F1'] - post['test F1']:.2f}
+  (post-pruned), and unseen-row F1 rises from {default['test F1 (unseen rows)']:.2f} to {post['test F1 (unseen rows)']:.2f}. Pruning works.
+""")
 ''')
+explain('Draws the top 3 levels of the pre-pruned tree. Each box shows the question, the share of rows and the class mix.')
 code(r'''
 plt.figure(figsize=(22, 9))
 plot_tree(pre_tree, feature_names=tree_cols, class_names=["Not canceled", "Canceled"], filled=True, rounded=True,
@@ -553,6 +605,7 @@ story(
     "This is what the AutoML Explorer picks for data of this size.",
     "We tune both lightly with cross-validation on the training set, and tune the threshold the same way.",
 )
+explain('Random forest = **bagging**: 300 trees, each trained on a bootstrap sample of rows and a random subset of columns, then averaged. A small grid search (3-fold cross-validation) picks the leaf size and the number of columns per split.')
 code(r'''
 rf_search = GridSearchCV(
     RandomForestClassifier(n_estimators=300, random_state=RANDOM_STATE, n_jobs=-1),
@@ -561,6 +614,7 @@ rf_search = GridSearchCV(
 print("Random forest settings:", rf_search.best_params_, f"CV F1 = {rf_search.best_score_:.3f}\n")
 rf = evaluate("Random forest (CV)", rf_search.best_estimator_, tree_cols)
 ''')
+explain('Gradient boosting = **boosting**: trees added one after another, each correcting the previous errors. The grid search tunes the learning rate (shrinkage) and the tree size.')
 code(r'''
 hgb_search = GridSearchCV(
     HistGradientBoostingClassifier(max_iter=400, random_state=RANDOM_STATE),
@@ -568,6 +622,14 @@ hgb_search = GridSearchCV(
 ).fit(X_train[tree_cols], y_train)
 print("Gradient boosting settings:", hgb_search.best_params_, f"CV F1 = {hgb_search.best_score_:.3f}\n")
 hgb = evaluate("Gradient boosting (CV)", hgb_search.best_estimator_, tree_cols)
+
+r = {row["model"]: row for row in results}
+rf_row, hgb_row, post = r["Random forest (CV)"], r["Gradient boosting (CV)"], r["Decision tree (post-pruned, CV)"]
+say(f"""📌 **What we found after running this**
+- Random forest (bagging): CV F1 {rf_row['CV F1 (train folds)']:.3f}, test F1 **{rf_row['test F1']:.3f}**, unseen rows {rf_row['test F1 (unseen rows)']:.3f}.
+- Gradient boosting: CV F1 {hgb_row['CV F1 (train folds)']:.3f}, test F1 **{hgb_row['test F1']:.3f}**, unseen rows {hgb_row['test F1 (unseen rows)']:.3f}.
+- Both beat the best single tree (test F1 {post['test F1']:.3f}). Combining many trees reduces the variance that makes one tree unstable.
+""")
 ''')
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -578,6 +640,7 @@ story(
     "We choose the final model by **cross-validated F1 on the training folds**, then read its test scores. "
     "The 'unseen rows' column shows performance on bookings with no twin in training.",
 )
+explain("Collects every model's results into one table and picks the final model by **cross-validated** F1 (not test F1). It then charts CV, test and unseen-row F1 side by side.")
 code(r'''
 comparison = pd.DataFrame(results).set_index("model")
 display(comparison.style.format("{:.3f}").background_gradient(cmap="Blues", subset=["CV F1 (train folds)", "test F1"]))
@@ -594,7 +657,7 @@ ax.set_xlim(0, 1); ax.set_xlabel("F1 for Canceled"); ax.set_title("All models, s
 plt.tight_layout(); plt.show()
 
 orig_best = 0.808  # original notebook's best: post-pruned tree, alpha chosen on the test set
-say(f"""**Final model: {final_name}** (highest cross-validated F1)
+say(f"""📌 **What we found after running this.** Final model: **{final_name}** (highest cross-validated F1)
 - On the test set it catches **{final['test recall']:.0%}** of cancellations (recall). When it flags a booking, it is right
   **{final['test precision']:.0%}** of the time (precision). F1 = **{final['test F1']:.3f}** and ROC-AUC = {final['test ROC-AUC']:.3f}.
 - On **unseen** test rows (no identical twin in training) F1 is **{final['test F1 (unseen rows)']:.3f}**. Expect roughly this on
@@ -605,6 +668,7 @@ say(f"""**Final model: {final_name}** (highest cross-validated F1)
   strength had been picked on the test set itself.
 """)
 ''')
+explain('Shuffles each column of 3,000 test rows 5 times and measures the drop in F1. A bigger drop means the model relies on that column more.')
 code(r'''
 check = X_test.sample(3000, random_state=RANDOM_STATE)
 imp = permutation_importance(final_model, check[final_cols], y_test.loc[check.index], scoring="f1", n_repeats=5,
@@ -613,7 +677,7 @@ importance = pd.Series(imp.importances_mean, index=final_cols).sort_values(ascen
 importance.head(12).sort_values().plot.barh(color=BLUE, figsize=(9, 5))
 plt.xlabel("drop in test F1 when the column is shuffled"); plt.title(f"What the final model relies on ({final_name})")
 plt.tight_layout(); plt.show()
-say("**Top 5 features of the final model:** " + ", ".join(f"`{c}`" for c in importance.index[:5]) +
+say("📌 **What we found after running this.** Top 5 features of the final model: " + ", ".join(f"`{c}`" for c in importance.index[:5]) +
     ". These match the drivers found in section 4, which is a good sign the model learned real patterns.")
 ''')
 
@@ -624,6 +688,7 @@ story(
     "Insights only create value when they change a decision: a policy, a price, a message to a guest.",
     "We turn each finding into an action, using the numbers computed above.",
 )
+explain('Pulls every number used in the recommendations from the analysis above.')
 code(r'''
 lead_hi, lead_lo = rate("lead time (days)", "251+"), rate("lead time (days)", "0-30")
 req0, req2 = rate("special requests", 0), rate("special requests", 2)
@@ -669,7 +734,7 @@ md("""
 | Threshold | chosen on training data | – | chosen on out-of-fold training predictions |
 | Tree pruning | alpha picked on **test** F1 (leakage) | – | chosen by 5-fold CV on training data only |
 | Models | LR, 3 trees | KMeans | LR, 3 trees, random forest, gradient boosting, baseline |
-| Explanations | print banners | found / why / doing | found / why / doing, plus observations computed from the data |
+| Explanations | print banners | found / why / doing | found before / why / what we will do / what the code does / what we found after (computed) |
 | Insight text | some numbers wrong (e.g. "Online ~40%", "Sep/Oct highest") | – | every number printed from the data |
 """)
 
