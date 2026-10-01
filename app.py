@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from automl import GLOSSARY, build_cells, decide, interpret, profile_dataset, run_cells, to_notebook
+from automl.narrative import story
 
 st.set_page_config(page_title="AutoML Explorer", layout="wide", initial_sidebar_state="expanded")
 
@@ -86,11 +87,17 @@ with st.expander("Column profile - what role does each column play?", expanded=b
 # ── Step 2: choose a target and let the engine decide ────────────────────
 st.subheader("2. What should we predict?")
 NONE = "Nothing - just find groups (clustering)"
+options = [NONE] + list(df.columns)
+suggested = profile.suggested_target
 choice = st.selectbox(
-    "Target column", [NONE] + list(df.columns),
+    "Target column", options, index=options.index(suggested) if suggested else 0,
+    key=f"target-{file.file_id}",  # a new file gets a fresh default
     help="The target is the column you want the model to predict. Choose 'Nothing' to look for natural groups instead.",
 )
 target = None if choice == NONE else choice
+if suggested and beginner:
+    with st.container(border=True):
+        st.markdown(story("suggested_target", col=suggested, reason=profile.target_reason).markdown())
 decision = get_decision(file.file_id, target, df, profile)
 
 with st.sidebar:
@@ -107,11 +114,11 @@ if decision.halted:
 
 summary = {
     "Task": decision.task.capitalize() + (f" ({decision.subtype})" if decision.subtype else ""),
-    "Model": decision.model,
+    "Models compared": " · ".join(decision.candidates) if decision.candidates else decision.model,
     "Rows used": f"{min(len(df), decision.sample_rows or len(df)):,}",
     "Judged by": decision.primary_metric or "Silhouette score",
 }
-for col, (label, value) in zip(st.columns([1.2, 1.6, 0.8, 0.9]), summary.items()):
+for col, (label, value) in zip(st.columns([1.1, 2.2, 0.7, 0.8]), summary.items()):
     col.caption(label)
     col.markdown(f"**{value}**")
 
@@ -130,7 +137,8 @@ if run and run["key"] != run_key:
 
 st.subheader("3. The generated notebook")
 if beginner:
-    st.caption("Each cell below does one job. Read the explanation, look at the code, then press **Run pipeline** to see the output appear under every cell.")
+    st.caption("Each cell below does one job and explains itself in five parts: 🔍 what we found before, 💡 why it matters, "
+               "🎯 what we're going to do, 🛠 what the code does, and, after you press **Run pipeline**, 📌 what we found.")
 
 b1, b2 = st.columns([1, 4])
 if b1.button("▶ Run pipeline", type="primary"):
@@ -152,8 +160,11 @@ for i, cell in enumerate(cells):
     if beginner:
         with st.container(border=True):
             st.markdown(cell.story.markdown())
+        st.markdown(f"🛠 **What this code does:** {cell.story.code}")
     st.code(cell.code, language="python")
     if not run:
+        if beginner and i == 0:
+            st.caption("📌 *What we found after running* appears under each cell once you press **Run pipeline**.")
         continue
     res = run["results"][i]
     if res.skipped:
@@ -163,6 +174,11 @@ for i, cell in enumerate(cells):
         st.code(res.stdout, language="text")
     for img in res.figures:
         st.image(img)
+    if res.notes:
+        with st.container(border=True):
+            st.markdown("📌 **What we found after running this:**")
+            for line in res.notes:
+                st.markdown(f"- {line}")
     if res.error:
         st.error(f"This cell failed: {res.error}")
         if beginner:

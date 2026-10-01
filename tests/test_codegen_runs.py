@@ -72,3 +72,32 @@ def test_each_plt_show_is_its_own_figure(classification_df):
     results, _ = run_cells(build_cells(d), classification_df)
     eda = next(r for r in results if r.cell_id == "eda")
     assert len(eda.figures) == 3
+
+
+def test_every_cell_has_a_five_part_story_and_explains_its_result(regression_df, blobs_df):
+    """Before: found / why / action / code. After running: at least one 📌 note."""
+    for df, target in [(regression_df, "price"), (blobs_df[["f1", "f2", "f3"]], None)]:
+        d = decide(df, profile_dataset(df), target)
+        cells = build_cells(d)
+        for c in cells:
+            assert c.story.found and c.story.why and c.story.action and c.story.code, c.id
+        results, _ = run_cells(cells, df)
+        assert not [r.cell_id for r in results if r.error]
+        silent = [r.cell_id for r in results if r.cell_id != "setup" and not r.notes]
+        assert not silent, silent
+
+
+def test_regression_runs_statistical_inference(regression_df):
+    d = decide(regression_df, profile_dataset(regression_df), "price")
+    assert [c.id for c in build_cells(d)][7:10] == ["vif", "ols", "assumptions"]
+    _, _, _, m = execute(regression_df, "price")
+    assert 0 < m["ols_r2"] <= 1 and m["ols_f_pvalue"] < 0.05
+    assert set(m["assumptions"]) == {"Linearity (RESET test)", "Equal spread / homoscedasticity (Breusch-Pagan)",
+                                     "Normal residuals (Jarque-Bera)"}
+    assert len(m["cv_scores"]) == 5 and "rules_score" in m
+
+
+def test_clustering_runs_pca_and_hierarchical(blobs_df):
+    _, cells, _, m = execute(blobs_df[["f1", "f2", "f3"]], None)
+    assert [c.id for c in cells][-4:] == ["pca", "choose_k", "cluster_fit", "hierarchical"]
+    assert m["pca_n80"] <= 3 and m["cluster_agreement"] > 0.6
