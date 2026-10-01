@@ -45,6 +45,8 @@ streamlit run app.py
 
 ## The decision tree
 
+This is a simplified view. The full specification, with every threshold, model setting and search space, is in [docs/DECISION_TREE.md](docs/DECISION_TREE.md).
+
 ```
 Upload
   │
