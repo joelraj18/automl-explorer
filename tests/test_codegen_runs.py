@@ -94,10 +94,52 @@ def test_regression_runs_statistical_inference(regression_df):
     assert 0 < m["ols_r2"] <= 1 and m["ols_f_pvalue"] < 0.05
     assert set(m["assumptions"]) == {"Linearity (RESET test)", "Equal spread / homoscedasticity (Breusch-Pagan)",
                                      "Normal residuals (Jarque-Bera)"}
-    assert len(m["cv_scores"]) == 5 and "rules_score" in m
+    assert len(m["cv_scores"]) == len(d.candidates) >= 5 and "rules_score" in m
 
 
 def test_clustering_runs_pca_and_hierarchical(blobs_df):
     _, cells, _, m = execute(blobs_df[["f1", "f2", "f3"]], None)
     assert [c.id for c in cells][-4:] == ["pca", "choose_k", "cluster_fit", "hierarchical"]
     assert m["pca_n80"] <= 3 and m["cluster_agreement"] > 0.6
+
+
+def test_imbalanced_data_compares_resampling_and_never_crashes():
+    """Regression test: the logit cell crashed when no input was significant; resampling must stay inside the folds."""
+    pytest.importorskip("imblearn")
+    from sklearn.datasets import make_classification
+    X, y = make_classification(1500, 6, n_informative=3, weights=[0.95], random_state=1)
+    df = pd.DataFrame(X, columns=[f"f{i}" for i in range(6)])
+    df["fraud"] = y
+    d, cells, results, m = execute(df, "fraud")
+    assert d.class_weight and d.resample and "resample" in [c.id for c in cells]
+    assert set(m["balance_scores"]) >= {"class weights (current)", "random oversampling", "random undersampling"}
+    assert m["balance_method"] in m["balance_scores"]
+
+
+def test_tuning_never_makes_the_model_worse(classification_df):
+    _, _, results, m = execute(classification_df, "churn")
+    if "tuned_cv" in m:
+        assert m["tuned_cv"] > m["cv_scores"][m["best_model"]]
+    assert next(r for r in results if r.cell_id == "tune").notes
+
+
+def test_many_exact_duplicates_are_kept_not_dropped():
+    """300 rows of 3 small category columns repeat naturally; dropping copies used to leave only 9 rows."""
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"colour": rng.choice(list("RGB"), 300), "size": rng.choice(list("SML"), 300), "shop": rng.choice(list("ab"), 300)})
+    d = decide(df, profile_dataset(df), None)
+    assert not d.drop_duplicates and "shop" not in d.drop_cols  # 'shop' is only the last column, not named like an outcome
+    results, _ = run_cells(build_cells(d), df)
+    prepare = next(r for r in results if r.cell_id == "prepare")
+    assert "**300 rows**" in prepare.notes[0]
+
+
+def test_xgboost_handles_text_labels_when_installed():
+    pytest.importorskip("xgboost")
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.normal(size=400), "z": rng.normal(size=400)})
+    df["label"] = np.where(df["x"] + rng.normal(scale=0.5, size=400) > 0, "yes", "no")
+    d = decide(df, profile_dataset(df), "label")
+    assert "XGBClassifier" in d.candidates
+    _, _, _, m = execute(df, "label")
+    assert m["cv_scores"]["XGBClassifier"] > 0.7

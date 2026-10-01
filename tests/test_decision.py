@@ -87,3 +87,17 @@ def test_every_step_reads_as_a_sentence(classification_df):
     for s in run(classification_df, "churn").steps:
         assert s.found and s.why and s.action
         assert "{" not in s.markdown()  # no unfilled template placeholders
+
+
+def test_metric_choice_follows_class_balance():
+    """Accuracy hides failure on a minority class, so it is only used when classes are close to even."""
+    rng = np.random.default_rng(0)
+    x = rng.random(1000)
+    even = pd.DataFrame({"x": x, "y": np.where(x > 0.5, "a", "b")})                      # 50 / 50
+    uneven = pd.DataFrame({"x": x, "y": np.where(x > 0.7, "yes", "no")})                 # 30 / 70
+    rare = pd.DataFrame({"x": x, "y": np.where(x > 0.9, "yes", "no")})                   # 10 / 90
+    assert run(even, "y").primary_metric == "Accuracy"
+    d = run(uneven, "y")
+    assert d.primary_metric == "Macro F1" and not d.class_weight and "uneven" in keys(d)
+    d = run(rare, "y")
+    assert d.primary_metric == "Macro F1" and d.class_weight
