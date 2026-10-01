@@ -62,6 +62,11 @@ def _prepare_cell(d: Decision) -> Cell:
             data[{col + '_month'!r}] = when.dt.month
             data[{col + '_weekday'!r}] = when.dt.dayofweek
             data = data.drop(columns={col!r})"""))
+    for prefix, y, m, day in d.date_parts:
+        lines.append(textwrap.dedent(f"""
+            # {y} / {m} / {day} are one date split in three: combine them to get the weekday
+            when = pd.to_datetime(pd.DataFrame({{"year": data[{y!r}], "month": data[{m!r}], "day": data[{day!r}]}}), errors="coerce")
+            data[{prefix + '_weekday'!r}] = when.dt.dayofweek  # 0 = Monday; impossible dates stay blank"""))
     if d.drop_duplicates:
         lines.append("\ndata = data.drop_duplicates()")
     if d.target:
@@ -163,6 +168,140 @@ def _preprocess_body(d: Decision) -> str:
 
 
 # ── Supervised cells ──────────────────────────────────────────────────────
+def _insights_cell(d: Decision) -> Cell:
+    if d.task == "regression":
+        outcome_code, label, as_pct = "data[target]", f"average `{d.target}`", False
+    else:
+        outcome_code, label, as_pct = f"data[target] == {d.positive_class!r}", f"rate of `{d.positive_class}`", True
+    fmt = "{:.1%}" if as_pct else "{:,.3g}"
+    body = f"""
+        outcome = {outcome_code}
+        overall = outcome.mean()
+        print(f"Overall {label.replace('`', '')}: {{overall:{fmt[2:-1]}}}")
+
+        def group_outcome(col):
+            values = data[col]
+            if col in num_features and values.nunique() > 10:
+                lowest = values.min()
+                values = pd.qcut(values, q=5, duplicates="drop")  # 5 equal-sized bands, labelled like "12-39"
+                values = values.cat.rename_categories(lambda band: f"{{max(band.left, lowest):.4g}}-{{band.right:.4g}}")
+            table = outcome.groupby(values, observed=True).agg(["mean", "size"])
+            return table[table["size"] >= 30]  # ignore tiny groups - they are too noisy
+
+        groups = {{col: group_outcome(col) for col in num_features + cat_features}}
+        groups = {{col: t for col, t in groups.items() if len(t) >= 2}}
+        spread = pd.Series({{col: t["mean"].max() - t["mean"].min() for col, t in groups.items()}}).sort_values(ascending=False)
+        top = spread.index[:4].tolist()
+        metrics["overall_outcome"] = float(overall)
+        metrics["drivers"] = {{
+            col: {{"low": str(groups[col]["mean"].idxmin()), "low_value": float(groups[col]["mean"].min()),
+                   "high": str(groups[col]["mean"].idxmax()), "high_value": float(groups[col]["mean"].max())}}
+            for col in top
+        }}
+
+        print("Columns where the {label.replace('`', '')} differs most between groups:")
+        for col in top:
+            print(f"\\n{{col}}")
+            print(groups[col]["mean"].rename_axis(None).map({fmt!r}.format).to_string())
+
+        fig, axes = plt.subplots(1, len(top), figsize=(4 * len(top), 4), squeeze=False)
+        for ax, col in zip(axes[0], top):
+            groups[col]["mean"].plot.bar(ax=ax, color="#0071e3")
+            ax.axhline(overall, color="grey", linestyle="--", linewidth=1)  # overall level for comparison
+            ax.set_title(col); ax.set_xlabel(""); ax.tick_params(axis="x", labelrotation=45)
+        axes[0][0].set_ylabel({label.replace('`', '')!r})
+        plt.tight_layout(); plt.show()
+    """
+    return _cell("insights", "Find the key drivers", _story("insights", outcome=label), body)
+
+
+def _compare_cell(d: Decision) -> Cell:
+    scoring = {"R²": "r2", "Macro F1": "f1_macro", "Accuracy": "accuracy"}[d.primary_metric]
+    imports = sorted({d.model_import(n) for n in d.candidates})
+    entries = "\n".join(f"    {n!r}: {d.model_constructor(n)}," for n in d.candidates)
+    wrap = ""
+    if d.log_target:
+        wrap = """
+            # Every candidate learns log(target) and converts its predictions back
+            from sklearn.compose import TransformedTargetRegressor
+            candidates = {name: TransformedTargetRegressor(regressor=m, func=np.log1p, inverse_func=np.expm1)
+                          for name, m in candidates.items()}
+        """
+    body = textwrap.dedent("""
+        from sklearn.model_selection import cross_val_score
+        {imports}
+
+        candidates = {{
+        {entries}
+        }}
+    """).format(imports="\n".join(imports), entries=entries) + textwrap.dedent(wrap) + textwrap.dedent(f"""
+        check = X_train.sample(min(len(X_train), 10000), random_state=42)  # a sample keeps this quick
+        cv_scores = {{}}
+        for name, candidate in candidates.items():
+            candidate_pipe = Pipeline([("prep", preprocessor), ("model", candidate)])
+            cv_scores[name] = float(cross_val_score(candidate_pipe, check, y_train.loc[check.index], cv=3, scoring={scoring!r}).mean())
+            print(f"{{name:32s}} {{metrics['metric_name']}} = {{cv_scores[name]:.3f}}")
+
+        best_name = max(cv_scores, key=cv_scores.get)
+        metrics["cv_scores"] = cv_scores
+        metrics["best_model"] = best_name
+        print(f"\\nWinner: {{best_name}}")
+
+        pd.Series(cv_scores).sort_values().plot.barh(color="#0071e3", figsize=(7, 3))
+        plt.axvline(metrics["baseline_score"], color="grey", linestyle="--", label="baseline")
+        plt.xlabel(f"cross-validated {{metrics['metric_name']}} (higher = better)"); plt.legend()
+        plt.title("Which kind of model fits this data best?")
+        plt.tight_layout(); plt.show()
+    """)
+    return _cell("compare", "Compare candidate models", CELL_STORIES["compare"], body)
+
+
+def _threshold_cell(d: Decision) -> Cell:
+    body = f"""
+        from sklearn.base import clone
+        from sklearn.metrics import f1_score, precision_recall_curve, precision_score, recall_score
+        from sklearn.model_selection import cross_val_predict
+
+        positive = {d.positive_class!r}
+        pos_col = list(pipe.classes_).index(positive)
+
+        # Out-of-fold probabilities: each training row is scored by a model that never saw it
+        check = X_train.sample(min(len(X_train), 20000), random_state=42)
+        y_check = y_train.loc[check.index] == positive
+        oof = cross_val_predict(clone(pipe), check, y_train.loc[check.index], cv=3, method="predict_proba")[:, pos_col]
+        precision, recall, thresholds = precision_recall_curve(y_check, oof)
+        f1 = 2 * precision * recall / (precision + recall + 1e-12)
+        threshold = float(thresholds[int(np.argmax(f1[:-1]))])
+
+        # Final check on the untouched test set
+        test_proba = pipe.predict_proba(X_test)[:, pos_col]
+        is_pos = y_test == positive
+        table = {{}}
+        for label, t in [("default 0.50", 0.5), (f"tuned {{threshold:.2f}}", threshold)]:
+            pred = test_proba >= t
+            table[label] = {{"precision": precision_score(is_pos, pred, zero_division=0),
+                            "recall": recall_score(is_pos, pred), "F1": f1_score(is_pos, pred)}}
+        table = pd.DataFrame(table).T
+        print(f"Test-set results for {{positive!r}}:")
+        print(table.round(3).to_string())
+        metrics.update(positive=positive, threshold=threshold,
+                       f1_default=float(table["F1"].iloc[0]), f1_tuned=float(table["F1"].iloc[1]),
+                       recall_default=float(table["recall"].iloc[0]), recall_tuned=float(table["recall"].iloc[1]),
+                       precision_default=float(table["precision"].iloc[0]), precision_tuned=float(table["precision"].iloc[1]))
+
+        plt.figure(figsize=(7, 4))
+        plt.plot(thresholds, precision[:-1], label="precision")
+        plt.plot(thresholds, recall[:-1], label="recall")
+        plt.plot(thresholds, f1[:-1], label="F1")
+        plt.axvline(threshold, color="grey", linestyle="--", label=f"chosen {{threshold:.2f}}")
+        plt.xlabel(f"threshold: say {{positive!r}} when the model is at least this sure"); plt.legend()
+        plt.title("The precision / recall trade-off")
+        plt.tight_layout(); plt.show()
+    """
+    return _cell("threshold", "Tune the decision threshold", _story("threshold", pos=d.positive_class), body)
+
+
+
 def _split_cell(d: Decision) -> Cell:
     strat = ", stratify=y" if d.stratify else ""
     body = f"""
@@ -222,29 +361,27 @@ def _baseline_cell(d: Decision) -> Cell:
 
 def _train_cell(d: Decision) -> Cell:
     lines = [
-        "import numpy as np",
-        d.model_import(),
-        "from sklearn.pipeline import Pipeline",
+        "from sklearn.base import clone",
         "",
-        f"model = {d.model_constructor()}",
-    ]
-    if d.log_target:
-        lines += [
-            "",
-            "# Learn log(target) instead of target, then convert predictions back",
-            "from sklearn.compose import TransformedTargetRegressor",
-            "model = TransformedTargetRegressor(regressor=model, func=np.log1p, inverse_func=np.expm1)",
-        ]
-    lines += [
-        "",
+        "model = clone(candidates[best_name])  # a fresh copy of the winning model",
         'pipe = Pipeline([("prep", preprocessor), ("model", model)])',
         "pipe.fit(X_train, y_train)",
         "y_pred = pipe.predict(X_test)",
         "",
         'metrics["train_score"] = score(y_train, pipe.predict(X_train))',
         'metrics["test_score"] = score(y_test, y_pred)',
-        "print(f\"{metrics['metric_name']}  train: {metrics['train_score']:.3f}   test: {metrics['test_score']:.3f}\")",
+        "print(f\"{best_name}  {metrics['metric_name']}  train: {metrics['train_score']:.3f}   test: {metrics['test_score']:.3f}\")",
     ]
+    if d.lookalikes:
+        lines += [
+            "",
+            "# Honest check: test rows with an identical twin in training are 'easy'. Score the rest on their own.",
+            "row_key = pd.util.hash_pandas_object(X, index=False)",
+            "unseen = ~row_key.loc[X_test.index].isin(set(row_key.loc[X_train.index]))",
+            'metrics["unseen_share"] = float(unseen.mean())',
+            'metrics["test_score_unseen"] = score(y_test[unseen], y_pred[unseen.to_numpy()])',
+            "print(f\"Test rows with no twin in training: {unseen.mean():.0%}  ->  {metrics['metric_name']} on them: {metrics['test_score_unseen']:.3f}\")",
+        ]
     if d.task == "regression":
         lines += [
             "",
@@ -273,7 +410,7 @@ def _train_cell(d: Decision) -> Cell:
             '    ax.set_title("Confusion matrix (test set)")',
             "    plt.tight_layout(); plt.show()",
         ]
-    return _cell("train", "Train and evaluate the model", _story("train", model=d.model), "\n".join(lines))
+    return _cell("train", "Train and evaluate the winner", CELL_STORIES["train"], "\n".join(lines))
 
 
 def _explain_cell(d: Decision) -> Cell:
@@ -362,7 +499,12 @@ def build_cells(d: Decision) -> list[Cell]:
     cells = [_setup_cell(d), _prepare_cell(d), _eda_cell(d)]
     if d.task == "clustering":
         return cells + [_cluster_prep_cell(d), _choose_k_cell(d), _cluster_fit_cell(d)]
-    return cells + [_split_cell(d), _preprocess_cell(d), _baseline_cell(d), _train_cell(d), _explain_cell(d)]
+    if d.task == "regression" or d.positive_class is not None:
+        cells.append(_insights_cell(d))
+    cells += [_split_cell(d), _preprocess_cell(d), _baseline_cell(d), _compare_cell(d), _train_cell(d)]
+    if d.positive_class is not None:
+        cells.append(_threshold_cell(d))
+    return cells + [_explain_cell(d)]
 
 
 def to_notebook(cells: list[Cell], decision: Decision, filename: str) -> str:

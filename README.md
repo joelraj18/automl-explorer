@@ -40,13 +40,17 @@ Upload
   │
   ├─ Quality gates ── < 30 rows / < 2 columns / > 60% empty ──▶ stop and explain why
   │
+  ├─ Target suggestion ── a column named like an outcome (status, label, churn…) is pre-selected
+  │
   ├─ Column clean-up
   │    ID-like, constant, free-text, > 40% empty  ──▶ drop
   │    dates                                       ──▶ year / month / weekday
-  │    duplicate rows                              ──▶ drop
+  │    year + month + day columns                  ──▶ combined, weekday added, impossible dates flagged
+  │    exact duplicate rows                        ──▶ drop
+  │    rows identical apart from the ID            ──▶ keep, but also score on "unseen" test rows
   │    remaining gaps                              ──▶ median / 'missing' category
   │
-  ├─ No target ─▶ CLUSTERING
+  ├─ No target ─▶ CLUSTERING (any outcome-like column is left out of the inputs)
   │                 ≤ 10k rows: KMeans        > 10k rows: MiniBatchKMeans
   │                 k chosen by best silhouette score (k = 2…8, on a sample)
   │
@@ -66,12 +70,18 @@ Upload
 ```
 
 Every supervised run also does the following:
-- a stratified train/test split
-- a **baseline** model to beat
+- a **key drivers** table: the outcome rate or average for each group of each column, e.g. "cancel rate by segment"
+- a stratified train/test split, and a **baseline** model to beat
+- a **model comparison**: the rule-based pick above becomes one of three candidates (linear, decision tree, forest or boosting), scored by 3-fold cross-validation on the training rows, and the winner is used
 - train-vs-test scores, so overfitting shows up
+- for binary targets, a **threshold tuned for the rarer class**, using out-of-fold predictions, never the test set
 - permutation feature importance on the original column names
 
 Large files are sampled so that the app stays fast: 50k rows for random forests, 200k for linear and boosting models, and 100k for clustering.
+
+## Worked example
+
+[`examples/inn_hotels/`](examples/inn_hotels/) is a full project on 36k hotel bookings. It includes a hand-checked, fully explained notebook (EDA, statsmodels, pruned trees, ensembles, business recommendations) and a comparison with what AutoML produces.
 
 ## Adding a new explanation or rule
 

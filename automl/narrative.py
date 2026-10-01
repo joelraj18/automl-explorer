@@ -75,6 +75,36 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "why": "Duplicates can land in both the training and test sets, which makes scores look better than they really are.",
         "action": "We remove duplicate rows, so that the test score is honest.",
     },
+    "lookalike_rows": {
+        "found": "{n:,} rows ({pct:.0f}%) are identical in every column except the ID {ids}.",
+        "why": "They may be genuine repeat records, so deleting them would be wrong. But a test row with an identical twin in training is an 'easy question', which can make the test score look better than it really is.",
+        "action": "We keep them, and also report the score on test rows that have no exact twin in training, so that you get an honest number.",
+    },
+    "date_parts": {
+        "found": "`{year}`, `{month}` and `{day}` together form one date ({invalid} rows are impossible dates, like 29 February in a non-leap year).",
+        "why": "Stored separately, they can't tell the model the day of the week - and weekend vs weekday often matters.",
+        "action": "We combine them into a real date and add `{prefix}_weekday`; impossible dates are left blank and filled like any other gap.",
+    },
+    "target_like_excluded": {
+        "found": "`{col}` looks like an outcome column ({reason}).",
+        "why": "Using the answer as a clustering input would just group rows by that answer.",
+        "action": "We leave `{col}` out of the clustering, so that the groups come from the other columns. Pick it as the target if you want to predict it instead.",
+    },
+    "suggested_target": {
+        "found": "`{col}` looks like the outcome column: {reason}.",
+        "why": "Most tables are collected to predict one thing. Predicting it gives a model with a clear, checkable score.",
+        "action": "We pre-selected `{col}` as the target, so that we predict it. Choose 'Nothing' if you'd rather look for groups.",
+    },
+    "compare_models": {
+        "found": "Rules of thumb point to **{rule_model}** for data of this size and shape.",
+        "why": "Rules of thumb can be wrong for a particular dataset.",
+        "action": "We test three different kinds of model ({names}) with cross-validation, so that the data - not a guess - picks the winner.",
+    },
+    "positive_class": {
+        "found": "The rarer class is `{pos}` ({pct:.1f}% of rows).",
+        "why": "In most business problems the rare outcome (a cancellation, a fraud, a churn) is the one worth catching.",
+        "action": "We treat `{pos}` as the class to catch and tune the model's decision threshold for it, so that it finds more of them.",
+    },
     "missing_values": {
         "found": "{n_cols} feature column(s) still have some missing values (e.g. {examples}).",
         "why": "Most models crash or behave badly when they see an empty cell.",
@@ -224,11 +254,29 @@ CELL_STORIES: dict[str, Step] = {
         "We need a reference point: what would a 'dumb' strategy that ignores every input score?",
         "We score a baseline that always guesses {guess}, so that we can tell whether the real model actually learned something.",
     ),
+    "insights": Step(
+        "insights",
+        "We know the target, but not yet which columns move it.",
+        "Tables like 'cancellation rate by market segment' are insights a business can act on - and they show what a model should be able to learn.",
+        "We compare the {outcome} across groups of every column and chart the biggest differences, so that the key drivers are visible before any modelling.",
+    ),
+    "compare": Step(
+        "compare",
+        "Models learn in different ways: straight lines (linear), if/else rules (decision tree) or many trees voting (forest / boosting).",
+        "No single kind of model is best for every dataset.",
+        "We score each candidate with 3-fold cross-validation on (a sample of) the training rows, so that the winner is chosen without ever touching the test set.",
+    ),
     "train": Step(
         "train",
-        "The data is prepared and we have a baseline to beat.",
-        "This is the step where the model learns patterns from the training rows.",
-        "We train **{model}** and score it on both training and test rows, so that we can also spot overfitting (great on train, poor on test).",
+        "The comparison picked a winner and we have a baseline to beat.",
+        "This is the step where the model learns patterns from all training rows.",
+        "We retrain the winning model on every training row and score it on training and test rows, so that we can also spot overfitting (great on train, poor on test).",
+    ),
+    "threshold": Step(
+        "threshold",
+        "By default a model only says `{pos}` when it is more than 50% sure.",
+        "50% is arbitrary. A lower threshold catches more `{pos}` cases (higher recall) but raises more false alarms (lower precision).",
+        "We pick the threshold with the best F1 for `{pos}` from cross-validated predictions on training rows, so that the test set stays untouched for the final check.",
     ),
     "explain": Step(
         "explain",
@@ -300,6 +348,12 @@ def interpret(metrics: dict, target: str | None) -> list[str]:
     if test is None or name is None:
         return out
 
+    cv = metrics.get("cv_scores")
+    if cv and len(cv) > 1:
+        ranked = sorted(cv.items(), key=lambda kv: kv[1], reverse=True)
+        others = ", ".join(f"{n} {v:.2f}" for n, v in ranked[1:])
+        out.append(f"We compared {len(cv)} kinds of model; **{ranked[0][0]}** won cross-validation with {ranked[0][1]:.2f} (vs {others}).")
+
     if name == "R²":
         out.append(f"**R² = {test:.2f}** on the test set: the model explains about **{max(test, 0) * 100:.0f}%** of the variation in `{target}`.")
         if "mae" in metrics:
@@ -320,6 +374,31 @@ def interpret(metrics: dict, target: str | None) -> list[str]:
         out.append(f"⚠️ Training score ({train:.2f}) is much higher than test score ({test:.2f}) - a sign of **overfitting**. More data or a simpler model would help.")
     elif train is not None:
         out.append(f"Training ({train:.2f}) and test ({test:.2f}) scores are close, so the model **generalises** well to new rows.")
+
+    unseen = metrics.get("test_score_unseen")
+    if unseen is not None:
+        share = metrics.get("unseen_share", 0)
+        gap = test - unseen
+        verdict = ("so the duplicates make the headline score look a little better than it really is"
+                   if gap > 0.02 else "so the duplicates are not inflating the score")
+        out.append(f"On the {share:.0%} of test rows with no identical twin in training, {name} is **{unseen:.2f}** "
+                   f"(vs {test:.2f} overall), {verdict}.")
+
+    if "threshold" in metrics:
+        pos, t = metrics["positive"], metrics["threshold"]
+        out.append(f"For `{pos}`, moving the decision threshold from 0.50 to **{t:.2f}** changes recall "
+                   f"{metrics['recall_default']:.2f} → {metrics['recall_tuned']:.2f}, precision "
+                   f"{metrics['precision_default']:.2f} → {metrics['precision_tuned']:.2f} and F1 "
+                   f"{metrics['f1_default']:.2f} → **{metrics['f1_tuned']:.2f}**. Pick the threshold that matches the "
+                   f"business cost: a missed `{pos}` vs a false alarm.")
+
+    drivers = metrics.get("drivers")
+    if drivers:
+        pct = "overall_outcome" in metrics and metrics.get("task") == "classification"
+        show = (lambda v: f"{v:.0%}") if pct else (lambda v: f"{v:,.3g}")
+        for col, info in list(drivers.items())[:2]:
+            out.append(f"Key driver `{col}`: the outcome ranges from {show(info['low_value'])} (`{info['low']}`) "
+                       f"to {show(info['high_value'])} (`{info['high']}`).")
 
     top = metrics.get("top_features")
     if top:

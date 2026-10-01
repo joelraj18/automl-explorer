@@ -20,6 +20,8 @@ ID_UNIQUE_RATIO = 0.95    # unique in at least 95% of rows -> candidate ID
 TEXT_MIN_AVG_LEN = 30     # average string length above this -> free text
 SAMPLE_ROWS = 2000        # rows inspected for the (slower) string checks
 
+_TARGET_NAME = re.compile(
+    r"(status|target|label|class|churn|outcome|default|fraud|cancel|survived|result|response|^y$)", re.IGNORECASE)
 _ID_NAME = re.compile(r"(^|[_\s])(id|uuid|guid|key|index)$|^id[_\s]|^(id|index|unnamed: 0)$", re.IGNORECASE)
 
 
@@ -35,12 +37,26 @@ class ColumnProfile:
 
 
 @dataclass(frozen=True)
+class DateParts:
+    """A date stored as three separate columns, e.g. arrival_year / arrival_month / arrival_date."""
+    prefix: str
+    year: str
+    month: str
+    day: str
+    invalid: int  # rows whose combination is not a real date (e.g. 29 February 2018)
+
+
+@dataclass(frozen=True)
 class DatasetProfile:
     n_rows: int
     n_cols: int
     missing_frac: float
-    duplicate_rows: int
+    duplicate_rows: int                   # rows identical in every column (true copies)
     columns: tuple[ColumnProfile, ...] = field(default_factory=tuple)
+    lookalike_rows: int = 0               # extra rows identical once ID columns are ignored
+    suggested_target: str | None = None
+    target_reason: str = ""
+    date_parts: tuple[DateParts, ...] = field(default_factory=tuple)
 
     def get(self, name: str) -> ColumnProfile:
         return next(c for c in self.columns if c.name == name)
@@ -108,13 +124,56 @@ def _profile_column(name: str, s: pd.Series, n_rows: int) -> ColumnProfile:
     return make("categorical", f"{n_unique} categories")
 
 
+def suggest_target(columns: tuple[ColumnProfile, ...]) -> tuple[str | None, str]:
+    """Guess which column is the outcome to predict, and say why."""
+    usable = [c for c in columns if c.role in ("categorical", "numeric") and 2 <= c.n_unique <= 15]
+    named = [c for c in usable if _TARGET_NAME.search(c.name)]
+    if named:
+        c = named[-1]
+        return c.name, f"its name looks like an outcome and it has only {c.n_unique} values"
+    last = columns[-1] if columns else None
+    if last is not None and last in usable and last.role == "categorical":
+        return last.name, f"it is the last column and holds {last.n_unique} labels"
+    return None, ""
+
+
+def find_date_parts(df: pd.DataFrame, columns: tuple[ColumnProfile, ...]) -> tuple[DateParts, ...]:
+    numeric = {c.name for c in columns if c.role == "numeric"}
+    found = []
+    for col in numeric:
+        m = re.fullmatch(r"(.*?)[_ ]?year", col, re.IGNORECASE)
+        if not m:
+            continue
+        prefix = m.group(1)
+        sep = "_" if col[len(prefix):].startswith("_") else ""
+        month = next((c for c in (f"{prefix}{sep}month",) if c in numeric), None)
+        day = next((c for c in (f"{prefix}{sep}date", f"{prefix}{sep}day") if c in numeric), None)
+        if month and day:
+            parts = pd.DataFrame({"year": df[col], "month": df[month], "day": df[day]})
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                when = pd.to_datetime(parts, errors="coerce")
+            invalid = int((when.isna() & parts.notna().all(axis=1)).sum())
+            found.append(DateParts(prefix.rstrip("_ ") or "date", col, month, day, invalid))
+    return tuple(found)
+
+
 def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
     n_rows, n_cols = df.shape
     cols = tuple(_profile_column(str(c), df[c], n_rows) for c in df.columns)
+    exact = int(df.duplicated().sum())
+    id_cols = [c.name for c in cols if c.role == "id"]
+    rest = df.drop(columns=id_cols)
+    ignoring_id = int(rest.duplicated().sum()) if id_cols and rest.shape[1] else exact
+    target, reason = suggest_target(cols)
     return DatasetProfile(
         n_rows=n_rows,
         n_cols=n_cols,
         missing_frac=float(df.isna().to_numpy().mean()) if df.size else 0.0,
-        duplicate_rows=int(df.duplicated().sum()),
+        duplicate_rows=exact,
         columns=cols,
+        lookalike_rows=ignoring_id - exact,
+        suggested_target=target,
+        target_reason=reason,
+        date_parts=find_date_parts(df, cols),
     )

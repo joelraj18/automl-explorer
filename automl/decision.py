@@ -33,11 +33,13 @@ TEST_SIZE = 0.2
 # key -> (import line, constructor, family). ``{cw}`` is filled with class_weight when needed.
 MODELS: dict[str, tuple[str, str, str]] = {
     "LogisticRegression": ("from sklearn.linear_model import LogisticRegression", "LogisticRegression(max_iter=1000{cw})", "linear"),
+    "DecisionTreeClassifier": ("from sklearn.tree import DecisionTreeClassifier", "DecisionTreeClassifier(max_depth=8, min_samples_leaf=20, random_state=42{cw})", "tree"),
     "RandomForestClassifier": ("from sklearn.ensemble import RandomForestClassifier", "RandomForestClassifier(n_estimators=200, min_samples_leaf=2, n_jobs=-1, random_state=42{cw})", "tree"),
     "HistGradientBoostingClassifier": ("from sklearn.ensemble import HistGradientBoostingClassifier", "HistGradientBoostingClassifier(random_state=42{cw})", "hgb"),
     "LinearRegression": ("from sklearn.linear_model import LinearRegression", "LinearRegression()", "linear"),
     "RidgeCV": ("from sklearn.linear_model import RidgeCV", "RidgeCV(alphas=np.logspace(-3, 3, 13))", "linear"),
     "LassoCV": ("from sklearn.linear_model import LassoCV", "LassoCV(cv=5, random_state=42)", "linear"),
+    "DecisionTreeRegressor": ("from sklearn.tree import DecisionTreeRegressor", "DecisionTreeRegressor(max_depth=8, min_samples_leaf=20, random_state=42)", "tree"),
     "RandomForestRegressor": ("from sklearn.ensemble import RandomForestRegressor", "RandomForestRegressor(n_estimators=200, min_samples_leaf=2, n_jobs=-1, random_state=42)", "tree"),
     "HistGradientBoostingRegressor": ("from sklearn.ensemble import HistGradientBoostingRegressor", "HistGradientBoostingRegressor(random_state=42)", "hgb"),
     "KMeans": ("from sklearn.cluster import KMeans", "KMeans(n_clusters=k, n_init=10, random_state=42)", "cluster"),
@@ -62,6 +64,10 @@ class Decision:
     num_features: list[str] = field(default_factory=list)
     cat_features: list[str] = field(default_factory=list)
     rare_classes: list = field(default_factory=list)
+    positive_class: object = None              # binary classification: the (rarer) class to catch
+    candidates: list[str] = field(default_factory=list)   # models compared by cross-validation
+    date_parts: list[tuple[str, str, str, str]] = field(default_factory=list)  # (prefix, year, month, day)
+    lookalikes: bool = False                   # rows identical apart from an ID column exist
     k_range: tuple[int, int] = (2, 8)
     steps: list[Step] = field(default_factory=list)
 
@@ -75,15 +81,15 @@ class Decision:
 
     @property
     def scale_numeric(self) -> bool:
-        # Distance / coefficient based models need scaling; tree models don't care.
-        return self.family in ("linear", "cluster")
+        # Linear and distance-based models need scaling; trees ignore it, so scaling is always safe.
+        return True
 
-    def model_import(self) -> str:
-        return MODELS[self.model][0]
+    def model_import(self, name: str | None = None) -> str:
+        return MODELS[name or self.model][0]
 
-    def model_constructor(self) -> str:
+    def model_constructor(self, name: str | None = None) -> str:
         cw = ", class_weight='balanced'" if self.class_weight else ""
-        return MODELS[self.model][1].format(cw=cw)
+        return MODELS[name or self.model][1].format(cw=cw)
 
 
 def _halt(d: Decision, key: str, **values) -> Decision:
@@ -131,11 +137,20 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
     if profile.duplicate_rows:
         d.drop_duplicates = True
         d.steps.append(story("duplicates", n=profile.duplicate_rows))
+    if profile.lookalike_rows and target is not None:
+        d.lookalikes = True
+        ids = ", ".join(f"`{c}`" for c in profile.by_role("id"))
+        d.steps.append(story("lookalike_rows", n=profile.lookalike_rows, pct=profile.lookalike_rows / rows * 100, ids=ids))
+
+    target_like = profile.suggested_target if target is None else None
 
     for c in profile.columns:
         if c.name == target:
             continue
-        if c.role == "id":
+        if c.name == target_like:
+            d.drop_cols.append(c.name)
+            d.steps.append(story("target_like_excluded", col=c.name, reason=profile.target_reason))
+        elif c.role == "id":
             d.drop_cols.append(c.name)
             d.steps.append(story("id_column", col=c.name, pct=min(c.n_unique / max(rows * (1 - c.missing_frac), 1), 1) * 100))
         elif c.role == "constant":
@@ -157,6 +172,12 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
             d.cat_features.append(c.name)
             if c.role == "high_card_categorical":
                 d.steps.append(story("high_card_column", col=c.name, n_unique=c.n_unique))
+
+    for dp in profile.date_parts:
+        if all(c in d.num_features for c in (dp.year, dp.month, dp.day)):
+            d.date_parts.append((dp.prefix, dp.year, dp.month, dp.day))
+            d.num_features.append(f"{dp.prefix}_weekday")
+            d.steps.append(story("date_parts", year=dp.year, month=dp.month, day=dp.day, invalid=dp.invalid, prefix=dp.prefix))
 
     n_features = len(d.num_features) + len(d.cat_features)
     if n_features == 0 or (target is None and n_features < 2):
@@ -217,6 +238,9 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
         else:
             d.model = "HistGradientBoostingRegressor"
             d.steps.append(story("model_large", rows=rows, model=d.model))
+        linear = d.model if d.family == "linear" else "LinearRegression"
+        ensemble = "HistGradientBoostingRegressor" if rows > LARGE_DATA else "RandomForestRegressor"
+        d.candidates = [linear, "DecisionTreeRegressor", ensemble]
     else:
         # B2: classification
         d.task = "classification"
@@ -244,6 +268,9 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
         d.primary_metric = "Macro F1" if d.class_weight else "Accuracy"
         if d.class_weight:
             d.steps.append(story("imbalanced", min_pct=share.min() * 100, max_pct=share.max() * 100))
+        if n_classes == 2:
+            d.positive_class = share.index.tolist()[-1]  # value_counts sorts descending -> rarer class last
+            d.steps.append(story("positive_class", pos=d.positive_class, pct=share.min() * 100))
 
         if rows < SMALL_DATA:
             d.model = "LogisticRegression"
@@ -254,6 +281,10 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
         else:
             d.model = "HistGradientBoostingClassifier"
             d.steps.append(story("model_large", rows=rows, model=d.model))
+        ensemble = "HistGradientBoostingClassifier" if rows > LARGE_DATA else "RandomForestClassifier"
+        d.candidates = ["LogisticRegression", "DecisionTreeClassifier", ensemble]
+
+    d.steps.append(story("compare_models", rule_model=d.model, names=", ".join(d.candidates)))
 
     # ── Stage 3: speed ────────────────────────────────────────────────────
     limit = TRAIN_SAMPLE[d.family]
