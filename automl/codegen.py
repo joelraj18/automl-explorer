@@ -665,8 +665,21 @@ def _assumptions_cell(d: Decision) -> Cell:
 
 
 def _compare_cell(d: Decision) -> Cell:
-    imports = "\n".join(sorted({d.model_import(n) for n in d.candidates}))
-    entries = "\n".join(f"    {n!r}: {d.model_constructor(n)}," for n in d.candidates)
+    optional = [n for n in d.candidates if not d.model_import(n).startswith("from sklearn")]  # XGBoost, LightGBM
+    core = [n for n in d.candidates if n not in optional]
+    imports = "\n".join(sorted({d.model_import(n) for n in core}))
+    entries = "\n".join(f"    {n!r}: {d.model_constructor(n)}," for n in core)
+    # XGBoost / LightGBM are compiled libraries that can be installed yet fail to load (macOS without libomp). The engine
+    # already skips them then, but a notebook may run on another computer, so each one is added inside its own try.
+    extras = "".join("\n" + fill('''
+
+        try:  # optional boosting library
+            <<imp>>
+            candidates[<<name>>] = <<ctor>>
+        except Exception as exc:  # e.g. OSError "Library not loaded: libomp.dylib" on macOS
+            note(f"Skipped <<label>>: its library could not be loaded ({type(exc).__name__}). "
+                 "On macOS, `brew install libomp` usually fixes this.")
+    ''', imp=d.model_import(n), name=repr(n), label=n, ctor=d.model_constructor(n)) + "\n" for n in optional)
     wrap = fill('''
         # Every candidate learns log(target) and converts its predictions back
         from sklearn.compose import TransformedTargetRegressor
@@ -695,7 +708,7 @@ def _compare_cell(d: Decision) -> Cell:
                 return self.model_.predict_proba(X)
     ''') + "\n\n\n" if "XGBClassifier" in d.candidates else ""
     head = "from sklearn.model_selection import cross_val_score\n" + imports + "\n\n" + label_wrapper
-    code = head + "candidates = {\n" + entries + "\n}\n" + wrap + "\n" + fill('''
+    code = head + "candidates = {\n" + entries + "\n}\n" + extras + "\n" + wrap + "\n" + fill('''
 
 
         def make_pipe(model):

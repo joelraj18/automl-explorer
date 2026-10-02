@@ -11,6 +11,8 @@ Every choice is recorded as a narrative ``Step`` so the UI can explain it.
 """
 from __future__ import annotations
 
+import functools
+import importlib
 import importlib.util
 from dataclasses import dataclass, field
 
@@ -34,9 +36,26 @@ MAX_DUPLICATE_SHARE = 0.05     # up to 5% exact copies = probably accidental -> 
 SMALL_SAMPLE_WARNING = 200     # below this many rows every score is noisy
 
 
+@functools.lru_cache(maxsize=None)
+def library_problem(module: str) -> str | None:
+    """None when an optional library (xgboost, lightgbm, imblearn) really loads; otherwise a short reason.
+
+    Checking that the files exist is not enough: on macOS, pip's LightGBM / XGBoost need the OpenMP runtime (libomp),
+    and without it ``import lightgbm`` raises OSError. So we actually import the library, once, and remember the answer.
+    """
+    if importlib.util.find_spec(module) is None:
+        return "not installed"
+    try:
+        importlib.import_module(module)
+    except Exception as exc:  # OSError (missing libomp), ImportError (broken or mismatched build), ...
+        first_line = (str(exc).splitlines() or [""])[0]
+        return f"{type(exc).__name__}: {first_line[:160]}"
+    return None
+
+
 def installed(module: str) -> bool:
-    """Optional libraries (xgboost, lightgbm, imblearn) are used only when present."""
-    return importlib.util.find_spec(module) is not None
+    """Optional libraries are used only when they are present AND load without error."""
+    return library_problem(module) is None
 CLUSTER_SAMPLE = 100_000
 TEST_SIZE = 0.2
 
@@ -352,9 +371,14 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None, target
         d.candidates += [m for m, lib in (("XGBClassifier", "xgboost"), ("LGBMClassifier", "lightgbm")) if installed(lib)]
 
     d.steps.append(story("compare_models", rule_model=d.model, n=len(d.candidates), names=", ".join(d.candidates)))
-    missing = [lib for lib in ("xgboost", "lightgbm") if not installed(lib)]
+    problems = {lib: library_problem(lib) for lib in ("xgboost", "lightgbm")}
+    missing = [lib for lib, why in problems.items() if why == "not installed"]
+    broken = {lib: why for lib, why in problems.items() if why and why != "not installed"}
     if missing:
         d.steps.append(story("boosting_libs_missing", libs=" and ".join(missing), pip=" ".join(missing)))
+    if broken:
+        d.steps.append(story("boosting_libs_broken", libs=" and ".join(broken), pip=" ".join(broken),
+                             err="; ".join(f"{lib}: {why}" for lib, why in broken.items())))
 
     # ── Stage 3: speed ────────────────────────────────────────────────────
     limit = TRAIN_SAMPLE[d.family]

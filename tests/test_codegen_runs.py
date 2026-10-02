@@ -192,3 +192,67 @@ def test_near_perfect_score_warns_about_leakage():
     _, _, results, _ = execute(df, "y")
     train = next(r for r in results if r.cell_id == "train")
     assert any("near-perfect score" in n for n in train.notes)
+
+
+# ── A boosting library that is installed but will not load (macOS without libomp) ─
+LIBOMP_ERROR = "dlopen(lib_lightgbm.dylib, 0x0006): Library not loaded: @rpath/libomp.dylib"
+
+
+@pytest.fixture
+def lightgbm_cannot_load(monkeypatch):
+    """Make `import lightgbm` fail the way it does on a Mac without libomp, for the engine and for generated code."""
+    import builtins
+    import importlib
+    import sys
+
+    from automl.decision import library_problem
+
+    real_import, real_import_module = builtins.__import__, importlib.import_module
+
+    def broken(name, *args, **kwargs):
+        if name == "lightgbm" or name.startswith("lightgbm."):
+            raise OSError(LIBOMP_ERROR)
+        return real_import(name, *args, **kwargs)
+
+    def broken_module(name, *args, **kwargs):
+        if name == "lightgbm":
+            raise OSError(LIBOMP_ERROR)
+        return real_import_module(name, *args, **kwargs)
+
+    for mod in [m for m in sys.modules if m == "lightgbm" or m.startswith("lightgbm.")]:
+        monkeypatch.delitem(sys.modules, mod)
+    monkeypatch.setattr(builtins, "__import__", broken)
+    monkeypatch.setattr(importlib, "import_module", broken_module)
+    library_problem.cache_clear()
+    yield
+    library_problem.cache_clear()
+
+
+def test_an_unloadable_lightgbm_is_skipped_and_explained(lightgbm_cannot_load, classification_df):
+    """Regression test: on macOS without libomp, `import lightgbm` raised OSError and stopped the whole run."""
+    d, _, results, m = execute(classification_df, "churn")
+    assert "LGBMClassifier" not in d.candidates and "LGBMClassifier" not in m["cv_scores"]
+    step = next(s for s in d.steps if s.key == "boosting_libs_broken")
+    assert "libomp" in step.found and "brew install libomp" in step.action
+
+
+def test_an_exported_notebook_survives_a_library_that_will_not_load(classification_df, monkeypatch):
+    """The notebook may run on another computer: built where LightGBM works, run where it does not."""
+    pytest.importorskip("lightgbm")
+    d = decide(classification_df, profile_dataset(classification_df), "churn")
+    cells = build_cells(d)
+    assert "LGBMClassifier" in d.candidates
+    import builtins
+    real_import = builtins.__import__
+
+    def broken(name, *args, **kwargs):
+        if name == "lightgbm":
+            raise OSError(LIBOMP_ERROR)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    results, m = run_cells(cells, classification_df)
+    assert not [r.cell_id for r in results if r.error]
+    compare = next(r for r in results if r.cell_id == "compare")
+    assert any("Skipped LGBMClassifier" in n and "brew install libomp" in n for n in compare.notes)
+    assert "LGBMClassifier" not in m["cv_scores"]

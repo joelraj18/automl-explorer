@@ -162,8 +162,9 @@ if run and run["key"] != run_key:
 
 st.subheader("3. The generated notebook")
 if beginner:
-    st.caption("Each cell below does one job and explains itself in five parts: 🔍 what we found before, 💡 why it matters, "
-               "🎯 what we're going to do, 🛠 what the code does, and, after you press **Run pipeline**, 📌 what we found.")
+    st.caption("Each cell below does one job and explains itself in six parts: 🔍 what we found before, 💡 why it matters, "
+               "🎯 what we're going to do, 🛠 what the code does, the code itself (then its output and charts), and, after you "
+               "press **Run pipeline**, 📌 what we found.")
 
 b1, b2 = st.columns([1, 4])
 if b1.button("▶ Run pipeline", type="primary"):
