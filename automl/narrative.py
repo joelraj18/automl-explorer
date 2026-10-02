@@ -98,6 +98,13 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "why": "These are popular boosting libraries. scikit-learn's HistGradientBoosting uses the same idea (it is modelled on LightGBM), so the comparison is still fair without them.",
         "action": "We compare the models that are available. Run `pip install {pip}` and they will be added automatically.",
     },
+    "boosting_libs_broken": {
+        "found": "{libs} is installed but could not be loaded (`{err}`).",
+        "why": "XGBoost and LightGBM are compiled programs that need the OpenMP runtime (`libomp`). On a Mac it is not there by default, "
+               "so importing them fails. scikit-learn's HistGradientBoosting uses the same boosting idea, so the comparison is still fair without them.",
+        "action": "We skip {libs} instead of crashing. To include it: on macOS run `brew install libomp` (or `pip uninstall {pip}` to silence this), "
+                  "then restart the app.",
+    },
     "lookalike_rows": {
         "found": "{n:,} rows ({pct:.0f}%) are identical in every column except the ID {ids}.",
         "why": "They may be genuine repeat records, so deleting them would be wrong. But a test row with an identical twin in training is an 'easy question', which can make the test score look better than it really is.",

@@ -133,6 +133,7 @@ silhouette and adjusted Rand index: ARI > 0.6 means "robust".
 | Positive class (binary only) | the **rarer** class. It drives the insights, logit odds ratios, ROC and threshold tuning |
 | Rule-of-thumb model | < 1,000 rows → `LogisticRegression`; 1,000–100,000 → `RandomForestClassifier`; > 100,000 → `HistGradientBoostingClassifier` |
 | Candidates actually compared | `LogisticRegression`, `DecisionTreeClassifier`, `RandomForestClassifier`, `AdaBoostClassifier`, `HistGradientBoostingClassifier`, plus `XGBClassifier` (wrapped in `LabelEncoded`, because XGBoost needs classes numbered 0, 1, 2…) and `LGBMClassifier` **when installed** |
+| Optional libraries | "Installed" means the library **imports without error**, not just that its files exist. On macOS without `libomp`, `import lightgbm` raises `OSError`: the engine skips it with the `boosting_libs_broken` step ("run `brew install libomp`"). The exported notebook also adds each XGBoost/LightGBM model inside its own `try`, so a notebook built on one computer still runs on another computer where the library won't load |
 
 > The rule-of-thumb model is the engine's *first guess*. It is explained in the decision trace and sets the sampling limit, but the
 > **model that is actually used is the cross-validation winner** among the five candidates.

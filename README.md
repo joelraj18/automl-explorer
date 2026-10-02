@@ -34,6 +34,10 @@ pip install -r requirements.txt          # or requirements-extras.txt to also ge
 streamlit run app.py
 ```
 
+**On a Mac:** LightGBM and XGBoost need the OpenMP runtime. If it is missing you will see
+`Library not loaded: @rpath/libomp.dylib`. The app does not stop: it skips that library and explains why in the decision trace.
+To include LightGBM and XGBoost, run `brew install libomp` and restart the app.
+
 ## Project layout
 
 | File | What it does |
