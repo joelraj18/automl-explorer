@@ -15,28 +15,39 @@ The app is built for beginners. Every decision the engine makes comes with a thr
 > 💡 **Why it matters:** An ID only names a row; it says nothing about the outcome. A model would just memorise it.
 > 🎯 **What we're doing now:** We drop `customer_id`, so that the model learns real patterns instead of row numbers.
 
-Every **notebook cell** goes further and explains itself in five parts:
+### How every step reads
 
-| | Part | Where it comes from |
-|---|---|---|
-| 🔍 | **What we found before**: the evidence that led to this step | the cell's story |
-| 💡 | **Why it matters** | the cell's story |
-| 🎯 | **What we're going to do**, "so that …" | the cell's story |
-| 🛠 | **What this code does**, in plain words, right above the code | the cell's story |
-| 📌 | **What we found after running it** | written *by the code itself* with `note()`, so it always matches the output |
+Every **notebook cell** goes further and explains itself in six parts, always in this order:
+
+1. 🔍 **What we found before**: the evidence that led to this step.
+2. 💡 **Why it matters.**
+3. 🎯 **What we're going to do**, and what that achieves.
+4. 🛠 **What this code does**: the code below, in plain words.
+5. **The code itself**, then its printed output and charts.
+6. 📌 **What we found after running this**: written *by the code* (with `note()`) from the actual results, so it can't contradict the output.
 
 A **Beginner / Expert** switch in the sidebar shows or hides these explanations. The whole notebook can also be downloaded as a `.ipynb` file, with the explanations included as markdown cells.
 
 ## Run it
 
 ```bash
+brew install libomp                      # macOS only: LightGBM and XGBoost need this OpenMP runtime
 pip install -r requirements.txt          # or requirements-extras.txt to also get XGBoost (~200 MB)
 streamlit run app.py
 ```
 
-**On a Mac:** LightGBM and XGBoost need the OpenMP runtime. If it is missing you will see
-`Library not loaded: @rpath/libomp.dylib`. The app does not stop: it skips that library and explains why in the decision trace.
-To include LightGBM and XGBoost, run `brew install libomp` and restart the app.
+- `requirements.txt` already includes **LightGBM** and **imbalanced-learn** (over/undersampling). `requirements-extras.txt` adds **XGBoost**.
+- **On a Mac without `libomp`** you would see `Library not loaded: @rpath/libomp.dylib`. The app does not stop: it skips
+  LightGBM / XGBoost and explains why in the decision trace. Run `brew install libomp` and **restart the app**, and they are included again.
+- Libraries are checked once when the app starts, so restart it after installing anything.
+
+## What's included
+
+| Topic | What the app does |
+|---|---|
+| Boosting | `AdaBoost`, `HistGradientBoosting` and **LightGBM** are compared by default; **XGBoost** joins automatically when installed |
+| Class imbalance | Macro F1 instead of accuracy, `class_weight="balanced"`, a tuned decision threshold, **and** a comparison of **random oversampling, random undersampling and SMOTE** (via `imblearn`), applied only inside the training folds so the test score stays honest |
+| Missing or broken library | That model or step is skipped, never crashed, and the trace says what to install |
 
 ## Project layout
 
