@@ -154,3 +154,41 @@ def test_every_test_row_having_a_twin_does_not_crash():
     assert d.lookalikes and "test_score_unseen" not in m
     train = next(r for r in results if r.cell_id == "train")
     assert any("Every test row has an identical twin" in n for n in train.notes)
+
+
+# ── Regression tests from the thorough audit ──────────────────────────────────
+def test_column_names_never_break_the_generated_code():
+    """A target named with braces and quotes used to crash (f-string injection: `{x}` was executed)."""
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"weird col (€)": rng.normal(size=300), "kategorie ü": rng.choice(list("xyz"), 300)})
+    df['target {x} "q"'] = df["weird col (€)"] * 3 + rng.normal(size=300)
+    _, cells, results, _ = execute(df, 'target {x} "q"')
+    assert {"insights", "ols"} <= {c.id for c in cells}
+    assert all(r.notes for r in results if r.cell_id != "setup")
+
+
+def test_infinity_is_treated_as_missing():
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.normal(size=400), "ratio": np.where(rng.random(400) < 0.05, np.inf, rng.normal(size=400))})
+    df["y"] = df["x"] + rng.normal(size=400)
+    d, cells, _, _ = execute(df, "y")
+    assert d.has_infinite and "replace([np.inf, -np.inf], np.nan)" in cells[1].code
+
+
+def test_insights_with_no_group_large_enough_is_skipped_not_crashed():
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"a": rng.normal(size=31), "b": rng.normal(size=31), "c": rng.choice(list("xyz"), 31)})
+    df["label"] = ["p", "q"] * 15 + ["p"]
+    _, _, results, _ = execute(df, "label")
+    insights = next(r for r in results if r.cell_id == "insights")
+    assert any("No group of any column has at least 30 rows" in n for n in insights.notes)
+
+
+def test_near_perfect_score_warns_about_leakage():
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"a": rng.normal(size=500), "b": rng.normal(size=500)})
+    df["y"] = df["a"] * 2
+    df["y_copy"] = df["y"]                       # the answer, hiding under another name
+    _, _, results, _ = execute(df, "y")
+    train = next(r for r in results if r.cell_id == "train")
+    assert any("near-perfect score" in n for n in train.notes)

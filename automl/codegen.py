@@ -107,6 +107,9 @@ def _setup_cell(d: Decision) -> Cell:
 
 def _prepare_cell(d: Decision) -> Cell:
     chunks = ["data = df.copy()  # work on a copy, so the original upload stays untouched"]
+    if d.has_infinite:
+        chunks.append("# Infinity is not a measurement (usually a division by zero): treat it as a missing value\n"
+                      "data = data.replace([np.inf, -np.inf], np.nan)")
     if d.drop_cols:
         chunks.append(f"# Columns that can't help (IDs, constants, free text, mostly empty, or the answer itself)\n"
                       f"data = data.drop(columns={d.drop_cols!r})")
@@ -121,10 +124,10 @@ def _prepare_cell(d: Decision) -> Cell:
         ''', col=repr(col), y=repr(col + "_year"), m=repr(col + "_month"), w=repr(col + "_weekday")))
     for prefix, y, m, day in d.date_parts:
         chunks.append(fill('''
-            # <<y>> / <<m>> / <<day>> are one date split in three: combine them to get the weekday
+            # <<yr>> / <<mr>> / <<dr>> are one date split in three: combine them to get the weekday
             when = pd.to_datetime(pd.DataFrame({"year": data[<<yr>>], "month": data[<<mr>>], "day": data[<<dr>>]}), errors="coerce")
             data[<<w>>] = when.dt.dayofweek  # 0 = Monday; impossible dates stay blank and are filled later
-        ''', y=y, m=m, day=day, yr=repr(y), mr=repr(m), dr=repr(day), w=repr(prefix + "_weekday")))
+        ''', yr=repr(y), mr=repr(m), dr=repr(day), w=repr(prefix + "_weekday")))
     if d.drop_duplicates:
         chunks.append("data = data.drop_duplicates()  # exact copies would be counted twice")
     if d.target:
@@ -274,8 +277,9 @@ def _insights_cell(d: Decision) -> Cell:
         outcome_code, label, fmt = f"data[target] == {d.positive_class!r}", f"rate of {d.positive_class}", "{:.1%}"
     code = fill('''
         outcome = <<outcome>>
+        label = <<label_r>>  # e.g. "rate of Canceled"
         overall = outcome.mean()
-        print("Overall <<label>>: " + <<fmt>>.format(overall))
+        print(f"Overall {label}: " + <<fmt>>.format(overall))
 
 
         def group_outcome(col):
@@ -300,24 +304,28 @@ def _insights_cell(d: Decision) -> Cell:
             for col in top
         }
 
-        print("Columns where the <<label>> differs most between groups:")
+        if not top:
+            note("No group of any column has at least 30 rows, so group-by-group rates would be noise. Skipped; the models "
+                 "below still use every column.")
+        print(f"Columns where the {label} differs most between groups:")
         for col in top:
             print(f"\\n{col}")
             print(groups[col]["mean"].rename_axis(None).map(<<fmt>>.format).to_string())
 
-        fig, axes = plt.subplots(1, len(top), figsize=(4 * len(top), 4), squeeze=False)
-        for ax, col in zip(axes[0], top):
-            groups[col]["mean"].plot.bar(ax=ax, color="#0071e3")
-            ax.axhline(overall, color="grey", linestyle="--", linewidth=1)  # overall level for comparison
-            ax.set_title(col); ax.set_xlabel(""); ax.tick_params(axis="x", labelrotation=45)
-        axes[0][0].set_ylabel(<<label_r>>)
-        plt.tight_layout(); plt.show()
+        if top:
+            fig, axes = plt.subplots(1, len(top), figsize=(4 * len(top), 4), squeeze=False)
+            for ax, col in zip(axes[0], top):
+                groups[col]["mean"].plot.bar(ax=ax, color="#0071e3")
+                ax.axhline(overall, color="grey", linestyle="--", linewidth=1)  # overall level for comparison
+                ax.set_title(col); ax.set_xlabel(""); ax.tick_params(axis="x", labelrotation=45)
+            axes[0][0].set_ylabel(label)
+            plt.tight_layout(); plt.show()
 
         for col in top[:3]:
             info = metrics["drivers"][col]
-            note(f"`{col}`: the <<label>> ranges from **" + <<fmt>>.format(info["low_value"]) + f"** (`{info['low']}`) to **"
+            note(f"`{col}`: the {label} ranges from **" + <<fmt>>.format(info["low_value"]) + f"** (`{info['low']}`) to **"
                  + <<fmt>>.format(info["high_value"]) + f"** (`{info['high']}`), against " + <<fmt>>.format(overall) + " overall.")
-    ''', outcome=outcome_code, label=label, fmt=repr(fmt), label_r=repr(label))
+    ''', outcome=outcome_code, fmt=repr(fmt), label_r=repr(label))
     story = Step(
         "insights",
         f"We know the target, but not yet which columns move the {label}.",
@@ -519,7 +527,7 @@ def _vif_cell(d: Decision) -> Cell:
         vif = vif_table(ols_cols)
         while len(ols_cols) > 1 and vif.max() > 10:  # VIF above 10 = the column is mostly a copy of others
             worst = vif.idxmax()
-            removed.append(f"`{worst}` (VIF {vif.max():,.0f})")
+            removed.append(f"`{worst}` (VIF {vif.max():,.0f})" if vif.max() < 1e6 else f"`{worst}` (VIF ∞: an exact copy of other columns)")
             ols_cols.remove(worst)
             vif = vif_table(ols_cols)
         print(vif.sort_values(ascending=False).round(2).head(15).to_string())
@@ -583,11 +591,11 @@ def _ols_cell(d: Decision) -> Cell:
     ''',
         y_train="np.log1p(y_train.loc[stats_rows])  # the target is skewed, so we model log(target)" if log else "y_train.loc[stats_rows]",
         y_test="np.log1p(y_test)" if log else "y_test",
-        what=f"log({d.target})" if log else f"`{d.target}`",
+        what="log({target})" if log else "`{target}`",
         effect=fmt.replace("{col}", "coefficient"),
         low=fmt.replace("{col}", "95% CI low"),
         high=fmt.replace("{col}", "95% CI high"),
-        unit=f"`{d.target}` changes by about" if log else f"`{d.target}` changes by",
+        unit="`{target}` changes by about" if log else "`{target}` changes by",
     )
     story = Step(
         "ols",
@@ -865,6 +873,10 @@ def _train_cell(d: Decision) -> Cell:
                    "✅ small: it generalises to new rows.")
         note(f"Test {metrics['metric_name']} = **{metrics['test_score']:.3f}** vs baseline {metrics['baseline_score']:.3f}. "
              f"Train/test gap {gap:.3f}: {verdict}")
+        if metrics["test_score"] >= 0.99 and metrics["baseline_score"] < 0.9:
+            note("⚠️ A near-perfect score is rare on real data. Check that no input gives away the answer, for example a "
+                 "column recorded *after* the outcome, or a copy of the target under another name. The 'Explain' step shows "
+                 "which column the model leans on.")
         if len(X_test) < 100:
             note(f"The test set has only {len(X_test)} rows, so each row is worth {100 / len(X_test):.1f} percentage points. Treat this "
                  "score as rough; the cross-validated scores above are steadier.")
@@ -919,14 +931,15 @@ def _train_cell(d: Decision) -> Cell:
     if d.positive_class is not None:
         chunks.append(fill('''
             from sklearn.metrics import RocCurveDisplay, roc_auc_score
+            positive = <<pos>>
             proba = pipe.predict_proba(X_test)[:, list(pipe.classes_).index(<<pos>>)]
             metrics["roc_auc"] = float(roc_auc_score(y_test == <<pos>>, proba))
             RocCurveDisplay.from_predictions(y_test == <<pos>>, proba, name=best_name)
             plt.plot([0, 1], [0, 1], "k--", linewidth=1); plt.title("ROC curve (test set)")
             plt.tight_layout(); plt.show()
-            note(f"ROC-AUC = **{metrics['roc_auc']:.3f}**: pick one `<<pos_s>>` row and one other row at random, and the model gives "
-                 f"the `<<pos_s>>` row the higher probability {metrics['roc_auc']:.0%} of the time (0.5 = coin flip, 1.0 = perfect).")
-        ''', pos=repr(d.positive_class), pos_s=str(d.positive_class)))
+            note(f"ROC-AUC = **{metrics['roc_auc']:.3f}**: pick one `{positive}` row and one other row at random, and the model gives "
+                 f"the `{positive}` row the higher probability {metrics['roc_auc']:.0%} of the time (0.5 = coin flip, 1.0 = perfect).")
+        ''', pos=repr(d.positive_class)))
     story = Step(
         "train",
         "The comparison picked a winner and the tuning found its best settings.",
@@ -1037,6 +1050,9 @@ def _tree_rules_cell(d: Decision) -> Cell:
         if rules_score <= metrics["baseline_score"] + 0.01:
             verdict = ("no better than the baseline: the pattern is spread over many columns, so 3 simple questions can't capture it "
                        "and the full model is needed")
+        elif rules_score >= metrics["test_score"] - 0.005:
+            verdict = ("as good as (or better than) the full model: these 3 simple rules are enough here, and much easier "
+                       "to explain and use")
         elif rules_score >= metrics["test_score"] - 0.05:
             verdict = "so these simple rules capture **most** of what the full model knows"
         else:

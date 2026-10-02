@@ -158,3 +158,9 @@ def test_auto_mode_finds_a_numeric_outcome_by_name():
     target, step = resolve_target(p, "auto")
     assert target == "target" and "numeric with 214 values" in step.found
     assert decide(df, p, target, step).task == "regression"
+
+
+def test_an_id_column_cannot_be_the_target():
+    df = pd.DataFrame({"Booking_ID": [f"B{i:05d}" for i in range(200)], "x": np.random.default_rng(0).normal(size=200)})
+    d = run(df, "Booking_ID")
+    assert d.halted and keys(d)[-1] == "halt_target_type" and "names rows" in d.steps[-1].why
