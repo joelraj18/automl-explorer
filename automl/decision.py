@@ -110,6 +110,27 @@ class Decision:
         return MODELS[name or self.model][1].format(cw=cw)
 
 
+TARGET_MODES = ("auto", "manual", "none")  # let the engine decide / the user picks / no target (clustering)
+
+
+def resolve_target(profile: DatasetProfile, mode: str, chosen: str | None = None) -> tuple[str | None, Step]:
+    """Turn the user's choice into a target column (or None for clustering) plus a Step explaining who chose it and why."""
+    if mode not in TARGET_MODES:
+        raise ValueError(f"mode must be one of {TARGET_MODES}, not {mode!r}")
+    suggested = profile.suggested_target
+    if mode == "auto":
+        if suggested:
+            return suggested, story("target_auto_found", col=suggested, reason=profile.target_reason)
+        return None, story("target_auto_none")
+    if mode == "none":
+        return None, story("target_none")
+    if chosen not in {c.name for c in profile.columns}:
+        raise ValueError(f"{chosen!r} is not a column of this file")
+    hint = (f" (The engine would have suggested `{suggested}`.)" if suggested and suggested != chosen else
+            " (The engine suggests the same column.)" if suggested == chosen else "")
+    return chosen, story("target_manual", col=chosen, hint=hint)
+
+
 def _halt(d: Decision, key: str, **values) -> Decision:
     d.task = "halt"
     d.steps.append(story(key, **values))
@@ -128,13 +149,16 @@ def _max_correlation(df: pd.DataFrame, cols: list[str]) -> tuple[float, str, str
     return float(corr[i, j]), cols[i], cols[j]
 
 
-def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Decision:
+def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None, target_step: Step | None = None) -> Decision:
+    """`target_step` (from `resolve_target`) records who chose the target and why; it appears second in the trace."""
     d = Decision(task="halt", target=target)
     rows = profile.n_rows
 
     # ── Stage 0: quality gates ────────────────────────────────────────────
     n_num = len(profile.by_role("numeric"))
     d.steps.append(story("overview", rows=rows, cols=profile.n_cols, n_num=n_num, n_cat=profile.n_cols - n_num))
+    if target_step is not None:
+        d.steps.append(target_step)
     if rows < MIN_ROWS:
         return _halt(d, "halt_small", rows=rows)
     if profile.n_cols < 2:

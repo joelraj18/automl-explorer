@@ -156,16 +156,16 @@ pre { margin: 0; overflow-x: auto; background: var(--chip); border-radius: 8px; 
       </article>
 
       <article class="stop on" data-routes="inn dia iris">
-        <p class="kicker">Stop 2</p><h3>Suggest the target</h3>
-        <p class="why">Most tables are collected to predict one thing. The app pre-selects it; you can always change it.</p>
+        <p class="kicker">Stop 2</p><h3>Choose what to predict</h3>
+        <p class="why">You decide how the target is chosen. Most tables are collected to predict one thing; some have no answer column at all.</p>
         <ul class="rules">
-          <li><span class="if">IF</span><span>a column with 2–15 values is named like <code>status</code>, <code>target</code>, <code>label</code>, <code>churn</code>, <code>cancel</code>, <code>fraud</code>… <b>→ pre-select it</b></span></li>
-          <li><span class="if">ELSE IF</span><span>the last column is a category with 2–15 values <b>→ pre-select it</b> (weaker evidence)</span></li>
-          <li><span class="if">ELSE</span><span><b>no target</b> → the app defaults to clustering</span></li>
+          <li><span class="if">🤖 AUTO</span><span>a column named like <code>status</code>, <code>target</code>, <code>label</code>, <code>churn</code>, <code>cancel</code>, <code>fraud</code>… with 2–15 values (or numeric with any number of values) <b>→ predict it</b>; else the last column if it is a category with 2–15 values <b>→ predict it</b>; else <b>→ clustering</b> (the engine says why)</span></li>
+          <li><span class="if">🎯 PICK</span><span>you choose any column <b>→ predict it</b> (the trace notes when the engine would have chosen differently)</span></li>
+          <li><span class="if">🔍 NONE</span><span><b>→ clustering</b>; a column named like an outcome is still left out of the groups</span></li>
         </ul>
-        <p class="ex" data-ex="inn"><code>booking_status</code> pre-selected (its name says "status", 2 values).</p>
-        <p class="ex" data-ex="dia">You choose <code>target</code> yourself (214 values, so it isn't a label).</p>
-        <p class="ex" data-ex="iris">No outcome column → "Nothing – find groups".</p>
+        <p class="ex" data-ex="inn">Let the engine decide → <code>booking_status</code> (its name says "status", 2 values).</p>
+        <p class="ex" data-ex="dia">Let the engine decide → <code>target</code> (named like an outcome, numeric with 214 values → regression).</p>
+        <p class="ex" data-ex="iris">Let the engine decide → no outcome column found → clustering.</p>
       </article>
 
       <article class="stop on" data-routes="inn dia iris">

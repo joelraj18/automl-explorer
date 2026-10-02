@@ -881,9 +881,14 @@ def _train_cell(d: Decision) -> Cell:
             row_key = pd.util.hash_pandas_object(X, index=False)
             unseen = ~row_key.loc[X_test.index].isin(set(row_key.loc[X_train.index]))
             metrics["unseen_share"] = float(unseen.mean())
-            metrics["test_score_unseen"] = score(y_test[unseen], y_pred[unseen.to_numpy()])
-            note(f"On the {unseen.mean():.0%} of test rows with no identical twin in training: **{metrics['test_score_unseen']:.3f}**. "
-                 "Expect about this on genuinely new data.")
+            if unseen.sum() == 0:
+                note(f"Every test row has an identical twin in training: the inputs only take {row_key.nunique()} different "
+                     "combinations. There are no genuinely new rows to check, so the test score is as honest as it gets here.")
+            else:
+                metrics["test_score_unseen"] = score(y_test[unseen], y_pred[unseen.to_numpy()])
+                note(f"On the {unseen.mean():.0%} of test rows with no identical twin in training: **{metrics['test_score_unseen']:.3f}**. "
+                     "Expect about this on genuinely new data."
+                     + (f" (Only {unseen.sum()} such rows, so treat it as rough.)" if unseen.sum() < 30 else ""))
         '''))
     if d.task == "regression":
         chunks.append(fill('''

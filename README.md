@@ -3,6 +3,8 @@
 Upload a CSV or Excel file. AutoML Explorer then does four things:
 
 1. It profiles every column: number, category, date, ID, or free text?
+   You then choose what to predict in one of three ways: **let the engine decide** (it finds the outcome column, or chooses to
+   look for groups when there isn't one), **pick the target yourself**, or **skip prediction** and just find groups.
 2. It decides the machine-learning task and model with a transparent rule engine.
 3. It generates notebook-style Python cells and runs them live.
 4. It explains every step and every result in plain English.

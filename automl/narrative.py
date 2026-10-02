@@ -129,8 +129,28 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "action": "We fill gaps with the median (numbers) or a 'missing' category (categories), so that no rows have to be thrown away.",
     },
     # ── Task choice ───────────────────────────────────────────────────────
+    "target_auto_found": {
+        "found": "You let the engine decide, and `{col}` looks like the outcome: {reason}.",
+        "why": "Most tables are collected to predict one thing. A target gives the model a right answer to learn from and a score you can check.",
+        "action": "We predict `{col}`, so that you get a model and a measurable score. Switch to 'I'll pick the target' if you meant a different column.",
+    },
+    "target_auto_none": {
+        "found": "You let the engine decide, and no column looks like an outcome: none is named like status / label / churn / target, and the last column isn't a text category with 2-15 values (number codes such as 1-4 are too ambiguous to guess).",
+        "why": "Guessing a target would mean predicting something nobody asked for. Without a right-answer column, the honest question is what groups exist.",
+        "action": "We look for natural groups instead (clustering), so that you still learn the data's structure. Pick a target yourself if you had one in mind.",
+    },
+    "target_manual": {
+        "found": "You chose `{col}` as the target.{hint}",
+        "why": "You know your business question best, so your choice always wins over the engine's guess.",
+        "action": "We predict `{col}`, so that the whole pipeline answers your question.",
+    },
+    "target_none": {
+        "found": "You chose not to predict anything.",
+        "why": "Without a right-answer column there is nothing to score predictions against, but there is still structure to find.",
+        "action": "We look for natural groups (clustering), so that rows that behave alike are put together.",
+    },
     "task_clustering": {
-        "found": "No target column was chosen.",
+        "found": "There is no target column.",
         "why": "Without a 'right answer' column we can't train a model to predict something - but we can still look for natural groups.",
         "action": "We run clustering, so that rows that look alike are grouped together.",
     },

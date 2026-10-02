@@ -128,10 +128,13 @@ def _profile_column(name: str, s: pd.Series, n_rows: int) -> ColumnProfile:
 def suggest_target(columns: tuple[ColumnProfile, ...]) -> tuple[str | None, str, bool]:
     """Guess which column is the outcome to predict. Returns (column, reason, found_by_name)."""
     usable = [c for c in columns if c.role in ("categorical", "numeric") and 2 <= c.n_unique <= 15]
-    named = [c for c in usable if _TARGET_NAME.search(c.name)]
+    # A name like "target" is strong evidence, so a NUMERIC column with many values qualifies too (-> regression).
+    named = [c for c in columns if _TARGET_NAME.search(c.name)
+             and (c in usable or (c.role == "numeric" and c.n_unique > 15))]
     if named:
         c = named[-1]
-        return c.name, f"its name looks like an outcome and it has only {c.n_unique} values", True
+        kind = f"it has only {c.n_unique} values" if c in usable else f"it is numeric with {c.n_unique} values"
+        return c.name, f"its name looks like an outcome and {kind}", True
     last = columns[-1] if columns else None
     if last is not None and last in usable and last.role == "categorical":
         return last.name, f"it is the last column and holds {last.n_unique} labels", False

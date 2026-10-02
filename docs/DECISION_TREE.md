@@ -33,9 +33,18 @@ The unique ratio is distinct values ÷ non-null values.
 - **Look-alike rows:** rows identical once the `id` columns are removed, minus the exact duplicates.
 - **Missing fraction:** the share of all cells that are empty.
 
-### P3. Target suggestion (`suggest_target`), pre-selected in the UI
+### P3. Choosing the target: three modes (`resolve_target` in `automl/decision.py`)
+| Mode in the app | What happens | First line of the trace after the overview |
+|---|---|---|
+| 🤖 **Let the engine decide** (default) | uses the suggestion below; **if there is none, the engine chooses clustering** | `target_auto_found` or `target_auto_none` |
+| 🎯 **I'll pick the target** | your column always wins; the trace notes when the engine would have picked a different one | `target_manual` |
+| 🔍 **No target: just find groups** | clustering; a column *named* like an outcome is still left out of the inputs | `target_none` |
+
+A manually picked target that can't be predicted (free text, a date, a single value) still stops with an explanation.
+
+### P3b. Target suggestion (`suggest_target`), used by "Let the engine decide"
 1. Usable columns are those with role `categorical` or `numeric` **and** 2–15 distinct values.
-2. If any usable column's name matches `status | target | label | class | churn | outcome | default | fraud | cancel | survived | result | response | y`,
+2. If a usable column, **or a numeric column with any number of values**, has a name matching `status | target | label | class | churn | outcome | default | fraud | cancel | survived | result | response | y`,
    the **last** such column is chosen. Reason: "its name looks like an outcome…".
 3. Otherwise, if the **last column** is usable and categorical, it is chosen.
 4. Otherwise no suggestion is made, and the default is clustering.

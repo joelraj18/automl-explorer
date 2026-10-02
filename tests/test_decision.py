@@ -101,3 +101,60 @@ def test_metric_choice_follows_class_balance():
     assert d.primary_metric == "Macro F1" and not d.class_weight and "uneven" in keys(d)
     d = run(rare, "y")
     assert d.primary_metric == "Macro F1" and d.class_weight
+
+
+# ── Choosing the target: let the engine decide / pick it / no target ─────────
+def test_auto_mode_finds_an_outcome_column():
+    from pathlib import Path
+    from automl.decision import resolve_target
+    hotels = pd.read_csv(Path(__file__).resolve().parents[1] / "examples" / "inn_hotels" / "INNHotelsGroup.csv")
+    p = profile_dataset(hotels)
+    target, step = resolve_target(p, "auto")
+    assert target == "booking_status" and step.key == "target_auto_found"
+    d = decide(hotels, p, target, step)
+    assert d.task == "classification" and keys(d)[1] == "target_auto_found"   # second line of the trace
+
+    target, step = resolve_target(p, "none")                                   # same file, user says "no target"
+    d = decide(hotels, p, target, step)
+    assert target is None and d.task == "clustering" and "booking_status" in d.drop_cols
+
+
+def test_auto_mode_chooses_clustering_when_nothing_looks_like_an_outcome():
+    from automl.decision import resolve_target
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"height": rng.normal(170, 10, 200), "weight": rng.normal(70, 8, 200)})
+    p = profile_dataset(df)
+    target, step = resolve_target(p, "auto")
+    assert target is None and step.key == "target_auto_none"
+    assert decide(df, p, target, step).task == "clustering"
+
+
+def test_manual_mode_respects_the_user_and_mentions_the_engines_suggestion():
+    from automl.decision import resolve_target
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.random(300), "price": rng.random(300) * 100, "status": rng.choice(["a", "b"], 300),
+                       "when": pd.date_range("2024-01-01", periods=300).astype(str)})
+    p = profile_dataset(df)
+    target, step = resolve_target(p, "manual", "price")
+    assert target == "price" and "`status`" in step.found                     # engine would have picked status
+    assert decide(df, p, target, step).task == "regression"
+    _, same = resolve_target(p, "manual", "status")
+    assert "suggests the same column" in same.found
+    target, step = resolve_target(p, "manual", "when")                       # a date can't be predicted here
+    assert keys(decide(df, p, target, step))[-1] == "halt_target_type"
+    for bad in [("manual", "nope"), ("guess", None)]:
+        try:
+            resolve_target(p, *bad)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+
+def test_auto_mode_finds_a_numeric_outcome_by_name():
+    from sklearn.datasets import load_diabetes
+    from automl.decision import resolve_target
+    df = load_diabetes(as_frame=True).frame        # outcome column is literally called "target", 214 values
+    p = profile_dataset(df)
+    target, step = resolve_target(p, "auto")
+    assert target == "target" and "numeric with 214 values" in step.found
+    assert decide(df, p, target, step).task == "regression"

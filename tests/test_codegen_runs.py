@@ -143,3 +143,14 @@ def test_xgboost_handles_text_labels_when_installed():
     assert "XGBClassifier" in d.candidates
     _, _, _, m = execute(df, "label")
     assert m["cv_scores"]["XGBClassifier"] > 0.7
+
+
+def test_every_test_row_having_a_twin_does_not_crash():
+    """Regression test: with few input combinations, no test row is 'unseen'; scoring an empty set used to crash."""
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"colour": rng.choice(list("RGB"), 300), "size": rng.choice(list("SML"), 300),
+                       "label": rng.choice(["a", "b"], 300)})
+    d, _, results, m = execute(df, "label")
+    assert d.lookalikes and "test_score_unseen" not in m
+    train = next(r for r in results if r.cell_id == "train")
+    assert any("Every test row has an identical twin" in n for n in train.notes)
