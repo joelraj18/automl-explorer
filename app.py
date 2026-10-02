@@ -38,7 +38,12 @@ def load_data(file_id: str, name: str, _raw: bytes) -> pd.DataFrame:
     import io
     buf = io.BytesIO(_raw)
     df = pd.read_csv(buf, low_memory=False) if name.lower().endswith(".csv") else pd.read_excel(buf)
-    df.columns = [str(c).strip() for c in df.columns]  # generated code refers to columns by name
+    # Generated code refers to columns by name, so names must be text and unique ("a" and "a " would collide).
+    names, seen = [], {}
+    for c in (str(c).strip() or "unnamed" for c in df.columns):
+        seen[c] = seen.get(c, 0) + 1
+        names.append(c if seen[c] == 1 else f"{c}_{seen[c]}")
+    df.columns = names
     return df
 
 
@@ -72,7 +77,15 @@ if not file:
     c3.markdown("**3. Run & explain**  \nNotebook-style code cells run live, and the results are translated into plain English.")
     st.stop()
 
-df = load_data(file.file_id, file.name, file.getvalue())
+try:
+    df = load_data(file.file_id, file.name, file.getvalue())
+except Exception as error:  # empty, corrupt or password-protected files
+    st.error(f"We couldn't read **{file.name}** ({type(error).__name__}: {error}). Check that it is a CSV or Excel file "
+             "with a header row and at least one row of data, then upload it again.")
+    st.stop()
+if df.empty:
+    st.error(f"**{file.name}** has column names but no rows of data. Upload a file with at least 30 rows.")
+    st.stop()
 profile = get_profile(file.file_id, df)
 
 # ── Step 1: look at the data ──────────────────────────────────────────────

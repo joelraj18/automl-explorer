@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import threading
 import time
 import traceback
 import warnings
@@ -39,7 +40,18 @@ def _grab_figures() -> list[bytes]:
     return images
 
 
-def run_cells(
+# matplotlib's pyplot keeps one global list of figures, and we temporarily replace plt.show: two users pressing
+# "Run" at the same moment on a shared server would mix their charts. Runs therefore take turns.
+_RUN_LOCK = threading.Lock()
+
+
+def run_cells(*args, **kwargs) -> tuple[list[CellResult], dict]:
+    """Run cells in order in one namespace (see `_run_cells`); only one run at a time per process."""
+    with _RUN_LOCK:
+        return _run_cells(*args, **kwargs)
+
+
+def _run_cells(
     cells: list[Cell],
     df: pd.DataFrame,
     on_cell: Callable[[int, Cell], None] | None = None,

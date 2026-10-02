@@ -61,7 +61,7 @@ A manually picked target that can't be predicted (free text, a date, a single va
 | Too few rows | rows < **30** |
 | Too few columns | columns < **2** |
 | Too empty | > **60%** of all cells missing |
-| Bad target | target role is `text`, `datetime` or `constant` |
+| Bad target | target role is `text`, `datetime`, `constant` or `id` (a different value in almost every row) |
 | No usable inputs (checked after clean-up) | 0 features, or **< 2** features when there is no target |
 | *(warning, not a stop)* Small data | fewer than **200 rows** → a story explains that one test row moves the score a lot, so cross-validated scores are steadier |
 | Single class (classification, after removing rare classes) | fewer than 2 classes left |
@@ -83,6 +83,7 @@ Then:
   report the unseen-row score.
 - **Look-alike rows** are kept, but flagged (supervised only), and an extra score on unseen rows is reported.
 - **Split dates** (P4) add `<prefix>_weekday`.
+- **±Infinity** (usually a division by zero upstream) is counted while profiling and replaced by a missing value in the prepare cell.
 - Remaining gaps are filled with the **median** (numbers) or a **"missing"** category.
 
 ---
@@ -182,9 +183,9 @@ Classification samples are stratified.
 | – | Compare | 10,000-row training sample, `cross_val_score(cv=3)` per candidate; winner = highest mean |
 | – | Resample (imbalanced + `imblearn`) | the winner under class weights vs `RandomOverSampler`, `RandomUnderSampler`, `SMOTE` (class weights switched off for the samplers), 3-fold CV, using imblearn's `Pipeline`, so resampling happens **only inside training folds**; if a sampler wins, `make_pipe` is redefined so tuning, training and threshold all use it |
 | – | Tune | `RandomizedSearchCV(n_iter=min(8, grid size), cv=3)` on the same sample, trials run **one after another** (each model already uses all cores; parallel trials on top deadlocked); spaces below. **New settings are adopted only if they beat the defaults' CV score**; otherwise the defaults are kept |
-| – | Train | refit the tuned winner on **all** training rows; train/test gap ≤ 0.05 "generalises", ≤ 0.15 "mild overfitting", > 0.15 "overfitting"; test set < 100 rows → noise warning; OOB score for forests; unseen-row score when look-alike rows exist; MAE and predicted-vs-actual (regression); report, confusion matrix and ROC-AUC (classification) |
+| – | Train | refit the tuned winner on **all** training rows; train/test gap ≤ 0.05 "generalises", ≤ 0.15 "mild overfitting", > 0.15 "overfitting"; test set < 100 rows → noise warning; test score ≥ 0.99 with a baseline under 0.9 → **leakage warning** (check for a column that gives away the answer); OOB score for forests; unseen-row score when look-alike rows exist; MAE and predicted-vs-actual (regression); report, confusion matrix and ROC-AUC (classification) |
 | – | Threshold (binary) | out-of-fold probabilities (`cv=3`, ≤ 20,000 training rows); threshold = argmax F1 on the precision-recall curve; test table at 0.50 vs tuned |
-| – | Rules | `DecisionTree(max_depth=3)` on unscaled inputs; `plot_tree`; the root split phrased as a question (a one-hot column becomes "is `plan` = basic?"); score ≤ baseline + 0.01 → "no better than the baseline", within 0.05 of the winner → "most", else "part" |
+| – | Rules | `DecisionTree(max_depth=3)` on unscaled inputs; `plot_tree`; the root split phrased as a question (a one-hot column becomes "is `plan` = basic?"); score ≤ baseline + 0.01 → "no better than the baseline"; within 0.005 of the winner (or better) → "as good as the full model: these rules are enough"; within 0.05 → "most"; else "part" |
 | – | Explain | `permutation_importance(n_repeats=3)` on ≤ 2,000 test rows, original columns |
 
 ### Tuning search spaces (`SEARCH_SPACES` in `automl/codegen.py`)
@@ -224,6 +225,8 @@ Classification samples are stratified.
 - `n_features > 30` (the Lasso rule) counts input columns *before* one-hot encoding.
 - The collinearity check (Ridge rule) only looks at original numeric columns, not derived date features.
 - Multiclass targets get no insights, logit or threshold cells; only the comparison, report and confusion matrix.
+- Column and class names enter the generated code only as quoted values (`repr`), never pasted into code text, so names with quotes or braces are safe.
+- Runs in the app take turns (one lock per server process), because matplotlib's chart list is shared by everyone using the same server.
 - Hierarchical clustering is limited to 1,500 rows, and the statsmodels cells to 20,000 rows (sampled).
 - Plain SMOTE treats one-hot columns as numbers. For data with many categories, SMOTENC is better; the beginner roadmap has
   the code.

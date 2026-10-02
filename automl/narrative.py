@@ -63,6 +63,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "why": "When most of a column is missing, any value we fill in is mostly invented.",
         "action": "We drop `{col}`, so that the model isn't trained on made-up numbers.",
     },
+    "infinite_values": {
+        "found": "{n:,} cell(s) hold infinity (e.g. in {examples}), usually from a division by zero upstream.",
+        "why": "Infinity is not a real measurement, and it breaks averages, charts and every model.",
+        "action": "We treat infinite values as missing, so that they are filled like any other gap instead of crashing the pipeline.",
+    },
     "datetime_column": {
         "found": "`{col}` holds dates.",
         "why": "Models can't read a date directly, but the year, month and weekday often carry real signal (e.g. seasons, weekends).",

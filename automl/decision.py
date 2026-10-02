@@ -86,6 +86,7 @@ class Decision:
     date_parts: list[tuple[str, str, str, str]] = field(default_factory=list)  # (prefix, year, month, day)
     lookalikes: bool = False                   # repeated rows exist (identical apart from an ID, or many exact copies)
     resample: bool = False                     # imbalanced + imblearn installed -> test over/under-sampling
+    has_infinite: bool = False                 # ±infinity found -> replaced by missing values in the prepare cell
     k_range: tuple[int, int] = (2, 8)
     steps: list[Step] = field(default_factory=list)
 
@@ -168,14 +169,19 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None, target
 
     if target is not None:
         tp = profile.get(target)
-        if tp.role in ("text", "datetime", "constant"):
+        if tp.role in ("text", "datetime", "constant", "id"):
             reason = {
                 "text": "Free text has too many unique values to predict as a label or a number.",
                 "datetime": "Predicting a date is a forecasting problem, which this tool doesn't cover yet.",
                 "constant": "It has only one value, so there is nothing to predict.",
+                "id": "It has a different value in (almost) every row: it names rows rather than describing an outcome, so there is nothing to learn.",
             }[tp.role]
             return _halt(d, "halt_target_type", target=target, role=tp.role, reason=reason)
 
+    if profile.infinite_cells:
+        d.has_infinite = True
+        d.steps.append(story("infinite_values", n=sum(profile.infinite_cells.values()),
+                             examples=", ".join(f"`{c}`" for c in list(profile.infinite_cells)[:3])))
     if profile.duplicate_rows:
         share = profile.duplicate_rows / rows
         if share <= MAX_DUPLICATE_SHARE:

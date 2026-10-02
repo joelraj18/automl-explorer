@@ -175,7 +175,7 @@ pre { margin: 0; overflow-x: auto; background: var(--chip); border-radius: 8px; 
           <li><span class="if stopflag">STOP IF</span><span>fewer than <b>30 rows</b></span></li>
           <li><span class="if stopflag">STOP IF</span><span>fewer than <b>2 columns</b></span></li>
           <li><span class="if stopflag">STOP IF</span><span>more than <b>60%</b> of all cells are empty</span></li>
-          <li><span class="if stopflag">STOP IF</span><span>the target is free text, a date, or a single value</span></li>
+          <li><span class="if stopflag">STOP IF</span><span>the target is free text, a date, a single value, or an ID (a different value in every row)</span></li>
           <li><span class="if stopflag">STOP IF</span><span>after clean-up no inputs are left (clustering needs ≥ 2)</span></li>
         </ul>
         <p class="ex" data-ex="inn">36,275 rows, 0% empty → passes.</p>
@@ -192,6 +192,7 @@ pre { margin: 0; overflow-x: auto; background: var(--chip); border-radius: 8px; 
           <li><span class="if">IF</span><span>exact duplicate rows ≤ <b>5%</b> <b>→ drop</b> (looks like double entry)</span></li>
           <li><span class="if">IF</span><span>duplicates &gt; 5%, or rows identical apart from the ID <b>→ keep</b>, but also score the model on "unseen" test rows</span></li>
           <li><span class="if">IF</span><span>no target and a column is <i>named</i> like an outcome <b>→ leave it out of clustering</b></span></li>
+          <li><span class="if">IF</span><span>a number is ±infinity (usually a division by zero) <b>→ treat it as missing</b></span></li>
           <li><span class="if">ALWAYS</span><span>gaps → median (numbers) or a "missing" category (text)</span></li>
         </ul>
         <p class="ex" data-ex="inn">Drop <code>Booking_ID</code>; add <code>arrival_weekday</code> (37 impossible dates); keep 10,275 look-alike rows (28%).</p>
@@ -360,6 +361,7 @@ pre { margin: 0; overflow-x: auto; background: var(--chip); border-radius: 8px; 
           <li><span class="if">IF</span><span>look-alike rows <b>→ also score test rows with no twin in training</b></span></li>
           <li><span class="if">IF</span><span>binary <b>→ ROC curve and AUC</b>; regression <b>→ MAE and predicted-vs-actual</b></span></li>
           <li><span class="if">IF</span><span>test set under 100 rows <b>→ warn</b> that each row is worth several points</span></li>
+          <li><span class="if">IF</span><span>test score ≥ 0.99 <b class="bad">→ leakage warning</b>: real data is rarely that easy, so check that no column gives away the answer</span></li>
         </ul>
         <p class="ex" data-ex="inn">Test macro F1 0.88 (baseline 0.40), ROC-AUC 0.96; 0.84 on test rows with no twin in training.</p>
         <p class="ex" data-ex="dia">Test R² 0.45, average error 42.8.</p>
@@ -373,7 +375,7 @@ pre { margin: 0; overflow-x: auto; background: var(--chip); border-radius: 8px; 
       <article class="stop on" data-routes="inn dia">
         <p class="kicker">Stop 11</p><h3>Readable rules and importance</h3>
         <p class="why">A 3-question decision tree in real units, then permutation importance (how much the score drops when a column is shuffled).</p>
-        <ul class="rules"><li><span class="if">IF</span><span>the 3-question tree is no better than the baseline <b>→ say so</b>: the pattern needs many columns</span></li></ul>
+        <ul class="rules"><li><span class="if">IF</span><span>the 3-question tree is no better than the baseline <b>→ say so</b>: the pattern needs many columns</span></li><li><span class="if">IF</span><span>it matches or beats the full model <b>→ recommend the simple rules</b></span></li></ul>
         <p class="ex" data-ex="inn">First question: is lead time ≤ 151.5 days?</p>
         <p class="ex" data-ex="dia">First question: is bmi ≤ 0.005?</p>
       </article>
@@ -401,6 +403,7 @@ pre { margin: 0; overflow-x: auto; background: var(--chip); border-radius: 8px; 
           <tr><td>VIF</td><td class="num good">&lt; 5</td><td class="num warn">5 – 10</td><td class="num bad">&gt; 10 (dropped)</td><td>Is a column a copy of the others?</td></tr>
           <tr><td>p-value</td><td class="num good">&lt; 0.05</td><td class="num">–</td><td class="num">≥ 0.05</td><td>Is the effect real, or could it be chance?</td></tr>
           <tr><td>Durbin–Watson</td><td class="num good">1.5 – 2.5</td><td class="num">–</td><td class="num bad">outside</td><td>Are neighbouring rows' errors independent?</td></tr>
+          <tr><td>Test score near 1.0</td><td class="num">–</td><td class="num">–</td><td class="num bad">≥ 0.99</td><td>Too good to be true? Look for a column that leaks the answer.</td></tr>
           <tr><td>Hierarchical agreement (ARI)</td><td class="num good">&gt; 0.6</td><td class="num">–</td><td class="num warn">≤ 0.6</td><td>Do two methods find the same groups?</td></tr>
         </tbody>
       </table>

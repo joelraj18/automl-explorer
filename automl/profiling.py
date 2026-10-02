@@ -10,6 +10,7 @@ import re
 import warnings
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_integer_dtype, is_numeric_dtype
 
@@ -58,6 +59,7 @@ class DatasetProfile:
     target_reason: str = ""
     target_by_name: bool = False          # True = the column's *name* says it is an outcome (strong evidence)
     date_parts: tuple[DateParts, ...] = field(default_factory=tuple)
+    infinite_cells: dict[str, int] = field(default_factory=dict)  # column -> how many ±infinity values it holds
 
     def get(self, name: str) -> ColumnProfile:
         return next(c for c in self.columns if c.name == name)
@@ -170,6 +172,9 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
     rest = df.drop(columns=id_cols)
     ignoring_id = int(rest.duplicated().sum()) if id_cols and rest.shape[1] else exact
     target, reason, by_name = suggest_target(cols)
+    numeric = df.select_dtypes("number")
+    inf_counts = np.isinf(numeric.to_numpy(dtype=float, na_value=np.nan)).sum(axis=0)
+    infinite = {str(c): int(n) for c, n in zip(numeric.columns, inf_counts) if n}
     return DatasetProfile(
         n_rows=n_rows,
         n_cols=n_cols,
@@ -181,4 +186,5 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
         target_reason=reason,
         target_by_name=by_name,
         date_parts=find_date_parts(df, cols),
+        infinite_cells=infinite,
     )
