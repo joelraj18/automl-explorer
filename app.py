@@ -7,8 +7,7 @@ understand the results.
 import pandas as pd
 import streamlit as st
 
-from automl import GLOSSARY, build_cells, decide, interpret, profile_dataset, run_cells, to_notebook
-from automl.narrative import story
+from automl import GLOSSARY, build_cells, decide, interpret, profile_dataset, resolve_target, run_cells, to_notebook
 
 st.set_page_config(page_title="AutoML Explorer", layout="wide", initial_sidebar_state="expanded")
 
@@ -49,8 +48,9 @@ def get_profile(file_id: str, _df: pd.DataFrame):
 
 
 @st.cache_data(show_spinner="Deciding the pipeline…", max_entries=10)
-def get_decision(file_id: str, target: str | None, _df: pd.DataFrame, _profile):
-    return decide(_df, _profile, target)
+def get_decision(file_id: str, mode: str, target: str | None, _df: pd.DataFrame, _profile, _target_step):
+    # (file, mode, target) fully determines the target step, so it is safe to leave that out of the cache key
+    return decide(_df, _profile, target, _target_step)
 
 
 ui_style()
@@ -86,19 +86,31 @@ with st.expander("Column profile - what role does each column play?", expanded=b
 
 # ── Step 2: choose a target and let the engine decide ────────────────────
 st.subheader("2. What should we predict?")
-NONE = "Nothing - just find groups (clustering)"
-options = [NONE] + list(df.columns)
-suggested = profile.suggested_target
-choice = st.selectbox(
-    "Target column", options, index=options.index(suggested) if suggested else 0,
-    key=f"target-{file.file_id}",  # a new file gets a fresh default
-    help="The target is the column you want the model to predict. Choose 'Nothing' to look for natural groups instead.",
+MODES = {
+    "auto": "🤖 Let the engine decide",
+    "manual": "🎯 I'll pick the target",
+    "none": "🔍 No target: just find groups",
+}
+mode = st.radio(
+    "How should we choose what to predict?", list(MODES), format_func=MODES.get, horizontal=True,
+    key=f"mode-{file.file_id}",  # a new file starts again from "let the engine decide"
+    help="The target is the column you want a model to predict. Let the engine look for one, pick it yourself, "
+         "or skip prediction and look for natural groups instead.",
 )
-target = None if choice == NONE else choice
-if suggested and beginner:
+chosen = None
+if mode == "manual":
+    columns = list(df.columns)
+    suggested = profile.suggested_target
+    chosen = st.selectbox("Target column", columns, index=columns.index(suggested) if suggested else 0,
+                          key=f"target-{file.file_id}")
+target, target_step = resolve_target(profile, mode, chosen)
+if beginner:
     with st.container(border=True):
-        st.markdown(story("suggested_target", col=suggested, reason=profile.target_reason).markdown())
-decision = get_decision(file.file_id, target, df, profile)
+        st.markdown(target_step.markdown())
+decision = get_decision(file.file_id, mode, target, df, profile, target_step)
+if not decision.halted:
+    outcome = f"{decision.task} ({decision.subtype})" if decision.subtype else decision.task
+    st.caption(f"→ Target: **{target or 'none'}** · task: **{outcome}**")
 
 with st.sidebar:
     st.subheader("🧠 Decision trace")

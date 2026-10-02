@@ -38,6 +38,11 @@ SEARCH_SPACES: dict[str, dict[str, list]] = {
     "AdaBoostRegressor": {"n_estimators": [50, 100, 200], "learning_rate": [0.05, 0.1, 0.5, 1.0]},
     "HistGradientBoostingClassifier": {"learning_rate": [0.03, 0.05, 0.1, 0.2], "max_leaf_nodes": [15, 31, 63], "l2_regularization": [0.0, 0.1, 1.0]},
     "HistGradientBoostingRegressor": {"learning_rate": [0.03, 0.05, 0.1, 0.2], "max_leaf_nodes": [15, 31, 63], "l2_regularization": [0.0, 0.1, 1.0]},
+    # reg_alpha = α (L1) and reg_lambda = λ (L2) regularisation
+    "XGBClassifier": {"n_estimators": [200, 400, 800], "learning_rate": [0.03, 0.1, 0.3], "max_depth": [3, 6, 9], "reg_alpha": [0.0, 0.1, 1.0], "reg_lambda": [1.0, 5.0, 10.0]},
+    "XGBRegressor": {"n_estimators": [200, 400, 800], "learning_rate": [0.03, 0.1, 0.3], "max_depth": [3, 6, 9], "reg_alpha": [0.0, 0.1, 1.0], "reg_lambda": [1.0, 5.0, 10.0]},
+    "LGBMClassifier": {"n_estimators": [200, 400, 800], "learning_rate": [0.03, 0.05, 0.1], "num_leaves": [15, 31, 63], "reg_alpha": [0.0, 0.1, 1.0], "reg_lambda": [0.0, 1.0, 5.0]},
+    "LGBMRegressor": {"n_estimators": [200, 400, 800], "learning_rate": [0.03, 0.05, 0.1], "num_leaves": [15, 31, 63], "reg_alpha": [0.0, 0.1, 1.0], "reg_lambda": [0.0, 1.0, 5.0]},
 }
 
 
@@ -456,10 +461,17 @@ def _logit_cell(d: Decision) -> Cell:
             odds = odds.reindex(odds["coefficient"].abs().sort_values(ascending=False).index)
             print(odds.round(3).head(20).to_string())
             significant = odds[odds["p-value"] < 0.05]
-            change = (significant["odds ratio"].head(12) - 1) * 100
-            change.sort_values().plot.barh(color=["#d1495b" if v > 0 else "#0071e3" for v in change.sort_values()], figsize=(8, 5))
-            plt.axvline(0, color="black", linewidth=1); plt.xlabel(f"% change in the odds of {positive!r}")
-            plt.title("What raises (red) or lowers (blue) the odds"); plt.tight_layout(); plt.show()
+            if len(significant):
+                change = ((significant["odds ratio"].head(12) - 1) * 100).sort_values()
+                change.plot.barh(color=["#d1495b" if v > 0 else "#0071e3" for v in change], figsize=(8, 5))
+                plt.axvline(0, color="black", linewidth=1); plt.xlabel(f"% change in the odds of {positive!r}")
+                plt.title("What raises (red) or lowers (blue) the odds"); plt.tight_layout(); plt.show()
+            elif odds["p-value"].isna().any():
+                note("statsmodels could not compute p-values: the inputs separate the classes (almost) perfectly, so the "
+                     "uncertainty can't be estimated. Use the odds-ratio directions only as a rough guide.")
+            else:
+                note("No single input is statistically significant on its own. The signal may come from combinations of columns, "
+                     "which the tree models below can capture.")
 
             metrics["logit_pseudo_r2"] = float(logit.prsquared)
             converged = logit.mle_retvals["converged"]
@@ -653,12 +665,40 @@ def _compare_cell(d: Decision) -> Cell:
         candidates = {name: TransformedTargetRegressor(regressor=m, func=np.log1p, inverse_func=np.expm1)
                       for name, m in candidates.items()}
     ''') if d.log_target else ""
-    code = "from sklearn.model_selection import cross_val_score\n" + imports + "\n\ncandidates = {\n" + entries + "\n}\n" + wrap + "\n" + fill('''
+    label_wrapper = fill('''
+        from sklearn.base import BaseEstimator, ClassifierMixin, clone
+
+
+        class LabelEncoded(ClassifierMixin, BaseEstimator):
+            """XGBoost only accepts classes numbered 0, 1, 2 ...: translate text labels in, and back out."""
+
+            def __init__(self, model):
+                self.model = model
+
+            def fit(self, X, y):
+                self.classes_, codes = np.unique(y, return_inverse=True)
+                self.model_ = clone(self.model).fit(X, codes)
+                return self
+
+            def predict(self, X):
+                return self.classes_[self.model_.predict(X)]
+
+            def predict_proba(self, X):
+                return self.model_.predict_proba(X)
+    ''') + "\n\n\n" if "XGBClassifier" in d.candidates else ""
+    head = "from sklearn.model_selection import cross_val_score\n" + imports + "\n\n" + label_wrapper
+    code = head + "candidates = {\n" + entries + "\n}\n" + wrap + "\n" + fill('''
+
+
+        def make_pipe(model):
+            """Preprocessing + model as one object, so every cross-validation fold repeats exactly the same steps."""
+            return Pipeline([("prep", preprocessor), ("model", model)])
+
+
         check = X_train.sample(min(len(X_train), <<n>>), random_state=42)  # a sample keeps this quick
         cv_scores = {}
         for name, candidate in candidates.items():
-            candidate_pipe = Pipeline([("prep", preprocessor), ("model", candidate)])
-            cv_scores[name] = float(cross_val_score(candidate_pipe, check, y_train.loc[check.index], cv=3, scoring=<<scoring>>).mean())
+            cv_scores[name] = float(cross_val_score(make_pipe(candidate), check, y_train.loc[check.index], cv=3, scoring=<<scoring>>).mean())
             print(f"{name:32s} {metrics['metric_name']} = {cv_scores[name]:.3f}")
 
         best_name = max(cv_scores, key=cv_scores.get)
@@ -683,35 +723,114 @@ def _compare_cell(d: Decision) -> Cell:
         f"Rules of thumb suggested **{d.model}**, but rules can be wrong for a particular dataset.",
         "Models learn in different ways. **Linear** models draw a straight line or plane. A **decision tree** asks if/else questions. "
         "**Bagging** (random forest) averages many trees grown on random bootstrap samples to cut variance. **Boosting** (AdaBoost, "
-        "gradient boosting) adds trees one by one, each fixing the previous errors. No single kind wins every time.",
+        "gradient boosting, and XGBoost / LightGBM when installed) adds trees one by one, each fixing the previous errors. No single "
+        "kind wins every time.",
         "We score every candidate with 3-fold cross-validation on training rows only, so that the data, not a guess, picks the winner "
         "and the test set stays untouched.",
-        "`candidates` lists one model of each kind. For each one, a `Pipeline` (preprocessing + model) is scored by `cross_val_score`: "
+        "`candidates` lists one model of each kind"
+        + (" (`LabelEncoded` lets XGBoost read text labels such as 'yes'/'no')" if "XGBClassifier" in d.candidates else "")
+        + ". `make_pipe` joins preprocessing and model, and `cross_val_score` grades each candidate: "
         "the training sample is cut into 3 parts, and each part is predicted by a model trained on the other two. The average of the "
         "3 scores is the model's grade.",
     )
     return _cell("compare", "Compare candidate models", story, code)
 
 
+def _resample_cell(d: Decision) -> Cell:
+    code = fill('''
+        from imblearn.over_sampling import SMOTE, RandomOverSampler
+        from imblearn.pipeline import Pipeline as ImbPipeline
+        from imblearn.under_sampling import RandomUnderSampler
+        from sklearn.base import clone
+
+
+        def without_class_weight(model):
+            """Resampling already balances the classes; class weights on top would correct twice."""
+            model = clone(model)
+            if "class_weight" in model.get_params():
+                model.set_params(class_weight=None)
+            return model
+
+
+        winner = candidates[best_name]
+        samplers = {
+            "random oversampling": RandomOverSampler(random_state=42),   # copy rare-class rows
+            "random undersampling": RandomUnderSampler(random_state=42), # drop common-class rows
+            "SMOTE": SMOTE(random_state=42),                             # invent new rare rows between real neighbours
+        }
+        options = {"class weights (current)": make_pipe(winner)}
+        for label, sampler in samplers.items():
+            # imblearn's Pipeline resamples ONLY while fitting, i.e. only inside the training folds, never the rows being scored
+            options[label] = ImbPipeline([("prep", preprocessor), ("resample", sampler), ("model", without_class_weight(winner))])
+
+        balance_scores = {}
+        for label, option in options.items():
+            try:
+                balance_scores[label] = float(cross_val_score(option, check, y_train.loc[check.index], cv=3, scoring=<<scoring>>).mean())
+            except ValueError as error:  # e.g. SMOTE needs at least 6 rare-class rows per fold
+                note(f"{label} could not run here ({error}).")
+            if label in balance_scores:
+                print(f"{label:26s} {metrics['metric_name']} = {balance_scores[label]:.3f}")
+
+        best_balance = max(balance_scores, key=balance_scores.get)
+        metrics["balance_scores"], metrics["balance_method"] = balance_scores, best_balance
+        pd.Series(balance_scores).sort_values().plot.barh(color="#0071e3", figsize=(7, 3))
+        plt.xlabel(f"cross-validated {metrics['metric_name']}"); plt.title(f"Ways to handle the rare class ({best_name})")
+        plt.tight_layout(); plt.show()
+
+        if best_balance != "class weights (current)":
+            chosen_sampler = samplers[best_balance]
+            candidates[best_name] = without_class_weight(winner)
+
+            def make_pipe(model):  # from now on every pipeline resamples its training rows first
+                return ImbPipeline([("prep", preprocessor), ("resample", chosen_sampler), ("model", model)])
+
+        gain = balance_scores[best_balance] - balance_scores["class weights (current)"]
+        note(f"Best way to handle the imbalance: **{best_balance}** ({balance_scores[best_balance]:.3f}"
+             + (f", {gain:+.3f} vs class weights)." if gain else ")."))
+        note("Resampling only ever touches training rows. The test set keeps its real class mix, so the final score stays honest.")
+    ''', scoring=repr(SCORING[d.primary_metric]))
+    story = Step(
+        "resample",
+        "The classes are very uneven, and so far we handle that with class weights: mistakes on the rare class count more.",
+        "There are other well-known fixes. **Oversampling** copies rare rows, **undersampling** drops common rows, and **SMOTE** "
+        "invents new rare rows between real neighbours. Which works best depends on the data.",
+        "We compare the four approaches on the winning model with cross-validation, and keep the best one, so that the rare class gets "
+        "the attention it deserves without cheating.",
+        "`imblearn`'s `Pipeline` adds a `resample` step that only runs while fitting. Inside cross-validation it therefore resamples "
+        "only the training folds, never the rows being scored. `without_class_weight` avoids correcting twice. If a sampler wins, "
+        "`make_pipe` is redefined so every later step (tuning, training, threshold) uses it.",
+    )
+    return _cell("resample", "Handle class imbalance (resampling)", story, code)
+
+
 def _tune_cell(d: Decision) -> Cell:
-    prefix = "model__regressor__" if d.log_target else "model__"
-    spaces = "\n".join(f"    {n!r}: {{{', '.join(f'{prefix + k!r}: {v!r}' for k, v in SEARCH_SPACES[n].items())}}},"
+    def prefix(name: str) -> str:  # where a model's settings live inside the pipeline (wrappers add a level)
+        return "model__" + ("regressor__" if d.log_target else "") + ("model__" if name == "XGBClassifier" else "")
+    spaces = "\n".join(f"    {n!r}: {{{', '.join(f'{prefix(n) + k!r}: {v!r}' for k, v in SEARCH_SPACES[n].items())}}},"
                        for n in d.candidates if n in SEARCH_SPACES)
     code = "from sklearn.model_selection import RandomizedSearchCV\n\nsearch_spaces = {\n" + spaces + "\n}\n" + fill('''
         space = search_spaces.get(best_name, {})
         if space:
             n_combos = int(np.prod([len(v) for v in space.values()]))
-            search = RandomizedSearchCV(Pipeline([("prep", preprocessor), ("model", candidates[best_name])]), space,
-                                        n_iter=min(8, n_combos), cv=3, scoring=<<scoring>>, random_state=42, n_jobs=-1)
+            search = RandomizedSearchCV(make_pipe(candidates[best_name]), space,
+                                        n_iter=min(8, n_combos), cv=3, scoring=<<scoring>>, random_state=42)
+            # Trials run one after another on purpose: each model already uses every CPU core, and running trials in
+            # parallel on top (n_jobs=-1 here) would put cores x cores threads on the machine and crawl to a halt.
             search.fit(check, y_train.loc[check.index])
-            tuned_model = search.best_estimator_.named_steps["model"]
-            settings = {k.split("__")[-1]: v for k, v in search.best_params_.items()}
-            metrics.update(tuned_settings=settings, tuned_cv=float(search.best_score_))
             print(pd.DataFrame(search.cv_results_)[["params", "mean_test_score"]].sort_values("mean_test_score", ascending=False)
                   .head(5).to_string(index=False))
             gain = search.best_score_ - cv_scores[best_name]
-            note(f"Tried {min(8, n_combos)} of {n_combos} setting combinations. Best: " + ", ".join(f"`{k}={v}`" for k, v in settings.items())
-                 + f" → cross-validated {metrics['metric_name']} {cv_scores[best_name]:.3f} → **{search.best_score_:.3f}** ({gain:+.3f}).")
+            if gain > 0:  # only adopt new settings if they beat the defaults the comparison already measured
+                tuned_model = search.best_estimator_.named_steps["model"]
+                settings = {k.split("__")[-1]: v for k, v in search.best_params_.items()}
+                metrics.update(tuned_settings=settings, tuned_cv=float(search.best_score_))
+                note(f"Tried {min(8, n_combos)} of {n_combos} setting combinations. Best: " + ", ".join(f"`{k}={v}`" for k, v in settings.items())
+                     + f" → cross-validated {metrics['metric_name']} {cv_scores[best_name]:.3f} → **{search.best_score_:.3f}** ({gain:+.3f}).")
+            else:
+                tuned_model = candidates[best_name]
+                note(f"Tried {min(8, n_combos)} of {n_combos} setting combinations, but none beat the default settings "
+                     f"({search.best_score_:.3f} vs {cv_scores[best_name]:.3f}), so we keep the defaults. Defaults are often well chosen.")
         else:
             tuned_model = candidates[best_name]
             note(f"{best_name} has no settings worth tuning here (it finds its best fit directly), so we use it as is.")
@@ -733,7 +852,7 @@ def _train_cell(d: Decision) -> Cell:
     chunks = [fill('''
         from sklearn.base import clone
 
-        pipe = Pipeline([("prep", preprocessor), ("model", clone(tuned_model))])
+        pipe = make_pipe(clone(tuned_model))
         pipe.fit(X_train, y_train)
         y_pred = pipe.predict(X_test)
 
@@ -741,13 +860,20 @@ def _train_cell(d: Decision) -> Cell:
         metrics["test_score"] = score(y_test, y_pred)
         print(f"{best_name}  {metrics['metric_name']}  train: {metrics['train_score']:.3f}   test: {metrics['test_score']:.3f}")
         gap = metrics["train_score"] - metrics["test_score"]
-        note(f"Test {metrics['metric_name']} = **{metrics['test_score']:.3f}** vs baseline {metrics['baseline_score']:.3f}. Train/test gap "
-             f"{gap:.3f}: " + ("⚠️ large, so the model memorises some training detail (overfitting)." if gap > 0.15 else "✅ small, so it generalises to new rows."))
+        verdict = ("⚠️ large: the model memorises training detail (overfitting)." if gap > 0.15 else
+                   "🟡 moderate: mild overfitting, common for tree ensembles and usually acceptable." if gap > 0.05 else
+                   "✅ small: it generalises to new rows.")
+        note(f"Test {metrics['metric_name']} = **{metrics['test_score']:.3f}** vs baseline {metrics['baseline_score']:.3f}. "
+             f"Train/test gap {gap:.3f}: {verdict}")
+        if len(X_test) < 100:
+            note(f"The test set has only {len(X_test)} rows, so each row is worth {100 / len(X_test):.1f} percentage points. Treat this "
+                 "score as rough; the cross-validated scores above are steadier.")
         fitted = pipe.named_steps["model"]
         fitted = getattr(fitted, "regressor_", fitted)
         if getattr(fitted, "oob_score_", None) is not None:
-            note(f"Out-of-bag score = {fitted.oob_score_:.3f}: each tree is checked on the rows its bootstrap sample left out, "
-                 "giving a free extra validation score.")
+            oob_metric = "R²" if metrics["task"] == "regression" else "accuracy"
+            note(f"Out-of-bag {oob_metric} = {fitted.oob_score_:.3f}: each tree is checked on the rows its bootstrap sample left "
+                 "out, giving a free extra validation score (always accuracy or R², whatever the main metric).")
     ''')]
     if d.lookalikes:
         chunks.append(fill('''
@@ -755,9 +881,14 @@ def _train_cell(d: Decision) -> Cell:
             row_key = pd.util.hash_pandas_object(X, index=False)
             unseen = ~row_key.loc[X_test.index].isin(set(row_key.loc[X_train.index]))
             metrics["unseen_share"] = float(unseen.mean())
-            metrics["test_score_unseen"] = score(y_test[unseen], y_pred[unseen.to_numpy()])
-            note(f"On the {unseen.mean():.0%} of test rows with no identical twin in training: **{metrics['test_score_unseen']:.3f}**. "
-                 "Expect about this on genuinely new data.")
+            if unseen.sum() == 0:
+                note(f"Every test row has an identical twin in training: the inputs only take {row_key.nunique()} different "
+                     "combinations. There are no genuinely new rows to check, so the test score is as honest as it gets here.")
+            else:
+                metrics["test_score_unseen"] = score(y_test[unseen], y_pred[unseen.to_numpy()])
+                note(f"On the {unseen.mean():.0%} of test rows with no identical twin in training: **{metrics['test_score_unseen']:.3f}**. "
+                     "Expect about this on genuinely new data."
+                     + (f" (Only {unseen.sum()} such rows, so treat it as rough.)" if unseen.sum() < 30 else ""))
         '''))
     if d.task == "regression":
         chunks.append(fill('''
@@ -793,8 +924,8 @@ def _train_cell(d: Decision) -> Cell:
             RocCurveDisplay.from_predictions(y_test == <<pos>>, proba, name=best_name)
             plt.plot([0, 1], [0, 1], "k--", linewidth=1); plt.title("ROC curve (test set)")
             plt.tight_layout(); plt.show()
-            note(f"ROC-AUC = **{metrics['roc_auc']:.3f}**: pick one <<pos_s>> row and one other row at random, and the model gives "
-                 f"the <<pos_s>> row the higher probability {metrics['roc_auc']:.0%} of the time (0.5 = coin flip, 1.0 = perfect).")
+            note(f"ROC-AUC = **{metrics['roc_auc']:.3f}**: pick one `<<pos_s>>` row and one other row at random, and the model gives "
+                 f"the `<<pos_s>>` row the higher probability {metrics['roc_auc']:.0%} of the time (0.5 = coin flip, 1.0 = perfect).")
         ''', pos=repr(d.positive_class), pos_s=str(d.positive_class)))
     story = Step(
         "train",
@@ -855,6 +986,9 @@ def _threshold_cell(d: Decision) -> Cell:
         note(f"Best threshold on training folds: **{threshold:.2f}**. On the test set, recall for {positive!r} goes "
              f"{metrics['recall_default']:.2f} → **{metrics['recall_tuned']:.2f}** and precision {metrics['precision_default']:.2f} → "
              f"**{metrics['precision_tuned']:.2f}** (F1 {metrics['f1_default']:.2f} → **{metrics['f1_tuned']:.2f}**).")
+        if metrics["f1_tuned"] < metrics["f1_default"]:
+            note("On this test set the default 0.50 did slightly better: a threshold picked on training rows doesn't always carry over. "
+                 "Keep 0.50 unless catching more cases (recall) matters more to you than the extra false alarms.")
         note(f"Which threshold to use is a business choice: lower it if missing a {positive!r} costs more than a false alarm.")
     ''', pos=repr(d.positive_class))
     story = Step(
@@ -890,16 +1024,25 @@ def _tree_rules_cell(d: Decision) -> Cell:
 
         plt.figure(figsize=(20, 8))
         plot_tree(tree, feature_names=names, <<classes>>filled=True, rounded=True, fontsize=9)
-        plt.title("A 3-question decision tree: read from the top; left = condition true")
+        plt.title("A 3-question decision tree: read from the top; left branch = the condition in the box is true")
         plt.show()
 
         rules_score = score(y_test, rules.predict(X_test))
         metrics["rules_score"] = float(rules_score)
-        root = names[tree.tree_.feature[0]]
-        note(f"The first and most important question is **`{root}` ≤ {tree.tree_.threshold[0]:,.4g}**.")
+        root, cut = names[tree.tree_.feature[0]], tree.tree_.threshold[0]
+        category = next((c for c in cat_features if root.startswith(c + "_")), None)  # a one-hot column like "plan_basic"
+        question = (f"is `{category}` = **{root[len(category) + 1:]}**? (no → left branch, yes → right)" if category
+                    else f"is `{root}` ≤ **{cut:,.4g}**? (yes → left branch, no → right)")
+        note("The tree's first and most important question: " + question)
+        if rules_score <= metrics["baseline_score"] + 0.01:
+            verdict = ("no better than the baseline: the pattern is spread over many columns, so 3 simple questions can't capture it "
+                       "and the full model is needed")
+        elif rules_score >= metrics["test_score"] - 0.05:
+            verdict = "so these simple rules capture **most** of what the full model knows"
+        else:
+            verdict = "so these simple rules capture **part** of what the full model knows"
         note(f"With just 3 questions the tree scores **{rules_score:.3f}** on test rows, against {metrics['test_score']:.3f} for "
-             f"{best_name}, so these simple rules capture " + ("most" if rules_score >= metrics["test_score"] - 0.05 else "part")
-             + " of what the full model knows.")
+             f"{best_name} and {metrics['baseline_score']:.3f} for the baseline: {verdict}.")
     ''', tree="DecisionTreeClassifier" if is_clf else "DecisionTreeRegressor",
        classes="class_names=[str(c) for c in rules.classes_], " if is_clf else "")
     story = Step(
@@ -932,8 +1075,9 @@ def _explain_cell(d: Decision) -> Cell:
              + f". Shuffling `{importance.index[0]}` alone costs {importance.iloc[0]:.3f} {metrics['metric_name']}.")
         useless = importance[importance <= 0].index.tolist()
         if useless:
-            note(f"{len(useless)} column(s) add nothing measurable to this model (e.g. " + ", ".join(f"`{c}`" for c in useless[:3])
-                 + "). The other columns already carry their information.")
+            note(f"{len(useless)} column(s) add nothing measurable to *this* model (e.g. " + ", ".join(f"`{c}`" for c in useless[:3])
+                 + "). That doesn't mean they don't matter: the model may get the same information from other columns, or the "
+                 "column may be rare. The key-driver table and the odds ratios judge each column on its own.")
     ''', scoring=repr(SCORING[d.primary_metric]))
     story = Step(
         "explain",
@@ -1139,7 +1283,10 @@ def build_cells(d: Decision) -> list[Cell]:
         cells += [_vif_cell(d), _ols_cell(d), _assumptions_cell(d)]
     elif d.positive_class is not None:
         cells.append(_logit_cell(d))
-    cells += [_compare_cell(d), _tune_cell(d), _train_cell(d)]
+    cells.append(_compare_cell(d))
+    if d.resample:
+        cells.append(_resample_cell(d))
+    cells += [_tune_cell(d), _train_cell(d)]
     if d.positive_class is not None:
         cells.append(_threshold_cell(d))
     return cells + [_tree_rules_cell(d), _explain_cell(d)]

@@ -3,6 +3,8 @@
 Upload a CSV or Excel file. AutoML Explorer then does four things:
 
 1. It profiles every column: number, category, date, ID, or free text?
+   You then choose what to predict in one of three ways: **let the engine decide** (it finds the outcome column, or chooses to
+   look for groups when there isn't one), **pick the target yourself**, or **skip prediction** and just find groups.
 2. It decides the machine-learning task and model with a transparent rule engine.
 3. It generates notebook-style Python cells and runs them live.
 4. It explains every step and every result in plain English.
@@ -28,7 +30,7 @@ A **Beginner / Expert** switch in the sidebar shows or hides these explanations.
 ## Run it
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt          # or requirements-extras.txt to also get XGBoost (~200 MB)
 streamlit run app.py
 ```
 
@@ -44,6 +46,10 @@ streamlit run app.py
 | `automl/runner.py` | Runs the cells in one shared namespace and captures printed output, figures and errors |
 
 ## The decision tree
+
+**New to this?** Open [docs/roadmap.html](docs/roadmap.html) in a browser: a one-page map of every step and condition, with example routes and ready-to-paste code for techniques the app doesn't automate.
+
+This is a simplified view. The full specification, with every threshold, model setting and search space, is in [docs/DECISION_TREE.md](docs/DECISION_TREE.md).
 
 ```
 Upload
@@ -97,9 +103,9 @@ Large files are sampled so that the app stays fast: 50k rows for random forests,
 | Logistic regression | statsmodels `Logit`: odds ratios with CIs and p-values, a perfect-separation warning, ROC-AUC curve, precision/recall threshold tuning |
 | Decision trees | a candidate model (tuned `max_depth`, `min_samples_leaf`, `ccp_alpha` pruning), plus a readable 3-level `plot_tree` with Gini impurity in real units |
 | Bagging | `RandomForest` with out-of-bag score |
-| Boosting | `AdaBoost` and `HistGradientBoosting` (scikit-learn's LightGBM-style booster) |
+| Boosting | `AdaBoost`, `HistGradientBoosting`, `LightGBM` and, when installed, `XGBoost` (tuned over learning rate, depth and α / λ regularisation) |
 | Tuning and validation | `cross_val_score` model comparison, `RandomizedSearchCV` on the winner, all preprocessing inside a `Pipeline` to prevent leakage |
-| Class imbalance and cost-sensitive use | `class_weight="balanced"`, macro F1, threshold chosen from out-of-fold predictions |
+| Class imbalance and cost-sensitive use | macro F1 whenever classes are uneven; for strong imbalance, `class_weight="balanced"` **and** a resampling comparison (random over-/under-sampling, SMOTE, inside the CV folds via `imblearn.Pipeline`); threshold chosen from out-of-fold predictions; cost-based threshold code in the roadmap |
 | K-Means | scaled features, elbow (inertia) + silhouette to choose k, centroids on a PCA map, plain-English cluster profiles |
 | Hierarchical clustering and PCA | ward dendrogram, `AgglomerativeClustering` vs K-Means agreement (adjusted Rand); PCA explained variance and loadings |
 

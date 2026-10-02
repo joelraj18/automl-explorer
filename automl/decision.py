@@ -11,6 +11,7 @@ Every choice is recorded as a narrative ``Step`` so the UI can explain it.
 """
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -27,6 +28,15 @@ MAX_CLASSES_AS_LABEL = 15      # numeric target with <= this many values -> clas
 SMALL_DATA = 1_000
 LARGE_DATA = 100_000
 TRAIN_SAMPLE = {"tree": 50_000, "hgb": 100_000, "linear": 100_000, "boost": 100_000}
+IMBALANCE_RATIO = 0.25        # smallest / largest class below this -> imbalanced: class weights (+ resampling step)
+UNEVEN_SHARE = 0.40           # binary minority under 40% (scaled for more classes) -> judge by macro F1, not accuracy
+MAX_DUPLICATE_SHARE = 0.05     # up to 5% exact copies = probably accidental -> drop; more = real repeats -> keep
+SMALL_SAMPLE_WARNING = 200     # below this many rows every score is noisy
+
+
+def installed(module: str) -> bool:
+    """Optional libraries (xgboost, lightgbm, imblearn) are used only when present."""
+    return importlib.util.find_spec(module) is not None
 CLUSTER_SAMPLE = 100_000
 TEST_SIZE = 0.2
 
@@ -37,6 +47,9 @@ MODELS: dict[str, tuple[str, str, str]] = {
     "RandomForestClassifier": ("from sklearn.ensemble import RandomForestClassifier", "RandomForestClassifier(n_estimators=200, min_samples_leaf=2, oob_score=True, n_jobs=-1, random_state=42{cw})", "tree"),
     "AdaBoostClassifier": ("from sklearn.ensemble import AdaBoostClassifier", "AdaBoostClassifier(n_estimators=100, random_state=42)", "boost"),
     "HistGradientBoostingClassifier": ("from sklearn.ensemble import HistGradientBoostingClassifier", "HistGradientBoostingClassifier(random_state=42{cw})", "hgb"),
+    # XGBoost only accepts classes numbered 0, 1, 2 ...: LabelEncoded (defined in the compare cell) translates text labels.
+    "XGBClassifier": ("from xgboost import XGBClassifier", "LabelEncoded(XGBClassifier(n_estimators=300, learning_rate=0.1, max_depth=6, subsample=0.8, colsample_bytree=0.8, n_jobs=-1, random_state=42))", "boost"),
+    "LGBMClassifier": ("from lightgbm import LGBMClassifier", "LGBMClassifier(n_estimators=300, learning_rate=0.05, num_leaves=31, subsample=0.8, subsample_freq=1, colsample_bytree=0.8, n_jobs=-1, verbose=-1, random_state=42{cw})", "boost"),
     "LinearRegression": ("from sklearn.linear_model import LinearRegression", "LinearRegression()", "linear"),
     "RidgeCV": ("from sklearn.linear_model import RidgeCV", "RidgeCV(alphas=np.logspace(-3, 3, 13))", "linear"),
     "LassoCV": ("from sklearn.linear_model import LassoCV", "LassoCV(cv=5, random_state=42)", "linear"),
@@ -44,6 +57,8 @@ MODELS: dict[str, tuple[str, str, str]] = {
     "RandomForestRegressor": ("from sklearn.ensemble import RandomForestRegressor", "RandomForestRegressor(n_estimators=200, min_samples_leaf=2, oob_score=True, n_jobs=-1, random_state=42)", "tree"),
     "AdaBoostRegressor": ("from sklearn.ensemble import AdaBoostRegressor", "AdaBoostRegressor(n_estimators=100, random_state=42)", "boost"),
     "HistGradientBoostingRegressor": ("from sklearn.ensemble import HistGradientBoostingRegressor", "HistGradientBoostingRegressor(random_state=42)", "hgb"),
+    "XGBRegressor": ("from xgboost import XGBRegressor", "XGBRegressor(n_estimators=300, learning_rate=0.1, max_depth=6, subsample=0.8, colsample_bytree=0.8, n_jobs=-1, random_state=42)", "boost"),
+    "LGBMRegressor": ("from lightgbm import LGBMRegressor", "LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, subsample=0.8, subsample_freq=1, colsample_bytree=0.8, n_jobs=-1, verbose=-1, random_state=42)", "boost"),
     "KMeans": ("from sklearn.cluster import KMeans", "KMeans(n_clusters=k, n_init=10, random_state=42)", "cluster"),
     "MiniBatchKMeans": ("from sklearn.cluster import MiniBatchKMeans", "MiniBatchKMeans(n_clusters=k, n_init=3, batch_size=2048, random_state=42)", "cluster"),
 }
@@ -69,7 +84,8 @@ class Decision:
     positive_class: object = None              # binary classification: the (rarer) class to catch
     candidates: list[str] = field(default_factory=list)   # models compared by cross-validation
     date_parts: list[tuple[str, str, str, str]] = field(default_factory=list)  # (prefix, year, month, day)
-    lookalikes: bool = False                   # rows identical apart from an ID column exist
+    lookalikes: bool = False                   # repeated rows exist (identical apart from an ID, or many exact copies)
+    resample: bool = False                     # imbalanced + imblearn installed -> test over/under-sampling
     k_range: tuple[int, int] = (2, 8)
     steps: list[Step] = field(default_factory=list)
 
@@ -94,6 +110,27 @@ class Decision:
         return MODELS[name or self.model][1].format(cw=cw)
 
 
+TARGET_MODES = ("auto", "manual", "none")  # let the engine decide / the user picks / no target (clustering)
+
+
+def resolve_target(profile: DatasetProfile, mode: str, chosen: str | None = None) -> tuple[str | None, Step]:
+    """Turn the user's choice into a target column (or None for clustering) plus a Step explaining who chose it and why."""
+    if mode not in TARGET_MODES:
+        raise ValueError(f"mode must be one of {TARGET_MODES}, not {mode!r}")
+    suggested = profile.suggested_target
+    if mode == "auto":
+        if suggested:
+            return suggested, story("target_auto_found", col=suggested, reason=profile.target_reason)
+        return None, story("target_auto_none")
+    if mode == "none":
+        return None, story("target_none")
+    if chosen not in {c.name for c in profile.columns}:
+        raise ValueError(f"{chosen!r} is not a column of this file")
+    hint = (f" (The engine would have suggested `{suggested}`.)" if suggested and suggested != chosen else
+            " (The engine suggests the same column.)" if suggested == chosen else "")
+    return chosen, story("target_manual", col=chosen, hint=hint)
+
+
 def _halt(d: Decision, key: str, **values) -> Decision:
     d.task = "halt"
     d.steps.append(story(key, **values))
@@ -112,13 +149,16 @@ def _max_correlation(df: pd.DataFrame, cols: list[str]) -> tuple[float, str, str
     return float(corr[i, j]), cols[i], cols[j]
 
 
-def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Decision:
+def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None, target_step: Step | None = None) -> Decision:
+    """`target_step` (from `resolve_target`) records who chose the target and why; it appears second in the trace."""
     d = Decision(task="halt", target=target)
     rows = profile.n_rows
 
     # ── Stage 0: quality gates ────────────────────────────────────────────
     n_num = len(profile.by_role("numeric"))
     d.steps.append(story("overview", rows=rows, cols=profile.n_cols, n_num=n_num, n_cat=profile.n_cols - n_num))
+    if target_step is not None:
+        d.steps.append(target_step)
     if rows < MIN_ROWS:
         return _halt(d, "halt_small", rows=rows)
     if profile.n_cols < 2:
@@ -137,14 +177,22 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
             return _halt(d, "halt_target_type", target=target, role=tp.role, reason=reason)
 
     if profile.duplicate_rows:
-        d.drop_duplicates = True
-        d.steps.append(story("duplicates", n=profile.duplicate_rows))
+        share = profile.duplicate_rows / rows
+        if share <= MAX_DUPLICATE_SHARE:
+            d.drop_duplicates = True
+            d.steps.append(story("duplicates", n=profile.duplicate_rows, pct=share * 100))
+        else:
+            d.lookalikes = target is not None
+            extra = (", and also score the model on test rows that have no exact twin in training, so that the score stays honest"
+                     if target is not None else ", so that common patterns keep their real weight in the groups")
+            d.steps.append(story("duplicates_kept", n=profile.duplicate_rows, pct=share * 100, extra=extra))
     if profile.lookalike_rows and target is not None:
         d.lookalikes = True
         ids = ", ".join(f"`{c}`" for c in profile.by_role("id"))
         d.steps.append(story("lookalike_rows", n=profile.lookalike_rows, pct=profile.lookalike_rows / rows * 100, ids=ids))
 
-    target_like = profile.suggested_target if target is None else None
+    # Only a column whose NAME says "outcome" is kept out of clustering; being the last column is too weak a reason.
+    target_like = profile.suggested_target if target is None and profile.target_by_name else None
 
     for c in profile.columns:
         if c.name == target:
@@ -207,6 +255,9 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
         return d
 
     # ── Branch B: supervised ──────────────────────────────────────────────
+    if rows < SMALL_SAMPLE_WARNING:
+        n_test = max(int(rows * TEST_SIZE), 1)
+        d.steps.append(story("small_data", rows=rows, n_test=n_test, pct=100 / n_test))
     y = df[target].dropna()
     n_missing_target = rows - len(y)
     if n_missing_target:
@@ -242,6 +293,7 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
             d.steps.append(story("model_large", rows=rows, model=d.model))
         linear = d.model if d.family == "linear" else "LinearRegression"
         d.candidates = [linear, "DecisionTreeRegressor", "RandomForestRegressor", "AdaBoostRegressor", "HistGradientBoostingRegressor"]
+        d.candidates += [m for m, lib in (("XGBRegressor", "xgboost"), ("LGBMRegressor", "lightgbm")) if installed(lib)]
     else:
         # B2: classification
         d.task = "classification"
@@ -265,10 +317,17 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
         # Stratifying needs at least one test row per class.
         d.stratify = int(counts.sum() * TEST_SIZE) >= n_classes
         share = counts / counts.sum()
-        d.class_weight = bool(share.min() / share.max() < 0.25)
-        d.primary_metric = "Macro F1" if d.class_weight else "Accuracy"
+        ratio = share.min() / share.max()
+        d.class_weight = bool(ratio < IMBALANCE_RATIO)
+        # Accuracy hides failure on a minority class: with 30% "yes", a model that always says "no" is 70% accurate.
+        d.primary_metric = "Macro F1" if share.min() < UNEVEN_SHARE * (2 / n_classes) or d.class_weight else "Accuracy"
+        if d.primary_metric == "Macro F1" and not d.class_weight:
+            d.steps.append(story("uneven", min_pct=share.min() * 100, max_pct=share.max() * 100))
         if d.class_weight:
-            d.steps.append(story("imbalanced", min_pct=share.min() * 100, max_pct=share.max() * 100))
+            d.resample = installed("imblearn")
+            extra = (" A later step also tests over- and under-sampling and keeps whichever works best." if d.resample else
+                     " (Install `imbalanced-learn` to also test over- and under-sampling.)")
+            d.steps.append(story("imbalanced", min_pct=share.min() * 100, max_pct=share.max() * 100, extra=extra))
         if n_classes == 2:
             d.positive_class = share.index.tolist()[-1]  # value_counts sorts descending -> rarer class last
             d.steps.append(story("positive_class", pos=d.positive_class, pct=share.min() * 100))
@@ -284,8 +343,12 @@ def decide(df: pd.DataFrame, profile: DatasetProfile, target: str | None) -> Dec
             d.steps.append(story("model_large", rows=rows, model=d.model))
         d.candidates = ["LogisticRegression", "DecisionTreeClassifier", "RandomForestClassifier",
                         "AdaBoostClassifier", "HistGradientBoostingClassifier"]
+        d.candidates += [m for m, lib in (("XGBClassifier", "xgboost"), ("LGBMClassifier", "lightgbm")) if installed(lib)]
 
-    d.steps.append(story("compare_models", rule_model=d.model, names=", ".join(d.candidates)))
+    d.steps.append(story("compare_models", rule_model=d.model, n=len(d.candidates), names=", ".join(d.candidates)))
+    missing = [lib for lib in ("xgboost", "lightgbm") if not installed(lib)]
+    if missing:
+        d.steps.append(story("boosting_libs_missing", libs=" and ".join(missing), pip=" ".join(missing)))
 
     # ── Stage 3: speed ────────────────────────────────────────────────────
     limit = TRAIN_SAMPLE[d.family]

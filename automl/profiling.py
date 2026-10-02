@@ -56,6 +56,7 @@ class DatasetProfile:
     lookalike_rows: int = 0               # extra rows identical once ID columns are ignored
     suggested_target: str | None = None
     target_reason: str = ""
+    target_by_name: bool = False          # True = the column's *name* says it is an outcome (strong evidence)
     date_parts: tuple[DateParts, ...] = field(default_factory=tuple)
 
     def get(self, name: str) -> ColumnProfile:
@@ -124,17 +125,20 @@ def _profile_column(name: str, s: pd.Series, n_rows: int) -> ColumnProfile:
     return make("categorical", f"{n_unique} categories")
 
 
-def suggest_target(columns: tuple[ColumnProfile, ...]) -> tuple[str | None, str]:
-    """Guess which column is the outcome to predict, and say why."""
+def suggest_target(columns: tuple[ColumnProfile, ...]) -> tuple[str | None, str, bool]:
+    """Guess which column is the outcome to predict. Returns (column, reason, found_by_name)."""
     usable = [c for c in columns if c.role in ("categorical", "numeric") and 2 <= c.n_unique <= 15]
-    named = [c for c in usable if _TARGET_NAME.search(c.name)]
+    # A name like "target" is strong evidence, so a NUMERIC column with many values qualifies too (-> regression).
+    named = [c for c in columns if _TARGET_NAME.search(c.name)
+             and (c in usable or (c.role == "numeric" and c.n_unique > 15))]
     if named:
         c = named[-1]
-        return c.name, f"its name looks like an outcome and it has only {c.n_unique} values"
+        kind = f"it has only {c.n_unique} values" if c in usable else f"it is numeric with {c.n_unique} values"
+        return c.name, f"its name looks like an outcome and {kind}", True
     last = columns[-1] if columns else None
     if last is not None and last in usable and last.role == "categorical":
-        return last.name, f"it is the last column and holds {last.n_unique} labels"
-    return None, ""
+        return last.name, f"it is the last column and holds {last.n_unique} labels", False
+    return None, "", False
 
 
 def find_date_parts(df: pd.DataFrame, columns: tuple[ColumnProfile, ...]) -> tuple[DateParts, ...]:
@@ -165,7 +169,7 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
     id_cols = [c.name for c in cols if c.role == "id"]
     rest = df.drop(columns=id_cols)
     ignoring_id = int(rest.duplicated().sum()) if id_cols and rest.shape[1] else exact
-    target, reason = suggest_target(cols)
+    target, reason, by_name = suggest_target(cols)
     return DatasetProfile(
         n_rows=n_rows,
         n_cols=n_cols,
@@ -175,5 +179,6 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
         lookalike_rows=ignoring_id - exact,
         suggested_target=target,
         target_reason=reason,
+        target_by_name=by_name,
         date_parts=find_date_parts(df, cols),
     )

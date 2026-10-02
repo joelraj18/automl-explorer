@@ -74,9 +74,24 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "action": "We keep only its most common values and group the rest as 'other', so that the data stays compact.",
     },
     "duplicates": {
-        "found": "{n:,} row(s) are exact copies of other rows.",
+        "found": "{n:,} row(s) ({pct:.1f}%) are exact copies of other rows - few enough to look like accidental double entries.",
         "why": "Duplicates can land in both the training and test sets, which makes scores look better than they really are.",
-        "action": "We remove duplicate rows, so that the test score is honest.",
+        "action": "We remove the duplicate rows, so that the test score is honest.",
+    },
+    "duplicates_kept": {
+        "found": "{n:,} rows ({pct:.0f}%) are exact copies of other rows - far too many to be typing mistakes.",
+        "why": "That many copies usually means the same real situation happens again and again (e.g. many identical bookings). Deleting them would throw away real information.",
+        "action": "We keep them{extra}.",
+    },
+    "small_data": {
+        "found": "The file has only {rows} rows, so the test set will hold about {n_test}.",
+        "why": "With so few test rows, one wrong prediction moves the test score by about {pct:.0f} percentage points, and flexible models can simply memorise the data.",
+        "action": "We still run every step, but trust the cross-validated scores more than the single test score, so that one lucky or unlucky split doesn't mislead you.",
+    },
+    "boosting_libs_missing": {
+        "found": "{libs} is not installed.",
+        "why": "These are popular boosting libraries. scikit-learn's HistGradientBoosting uses the same idea (it is modelled on LightGBM), so the comparison is still fair without them.",
+        "action": "We compare the models that are available. Run `pip install {pip}` and they will be added automatically.",
     },
     "lookalike_rows": {
         "found": "{n:,} rows ({pct:.0f}%) are identical in every column except the ID {ids}.",
@@ -101,7 +116,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
     "compare_models": {
         "found": "Rules of thumb point to **{rule_model}** for data of this size and shape.",
         "why": "Rules of thumb can be wrong for a particular dataset.",
-        "action": "We test three different kinds of model ({names}) with cross-validation, so that the data - not a guess - picks the winner.",
+        "action": "We test {n} different kinds of model ({names}) with cross-validation, so that the data - not a guess - picks the winner.",
     },
     "positive_class": {
         "found": "The rarer class is `{pos}` ({pct:.1f}% of rows).",
@@ -114,8 +129,28 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "action": "We fill gaps with the median (numbers) or a 'missing' category (categories), so that no rows have to be thrown away.",
     },
     # ── Task choice ───────────────────────────────────────────────────────
+    "target_auto_found": {
+        "found": "You let the engine decide, and `{col}` looks like the outcome: {reason}.",
+        "why": "Most tables are collected to predict one thing. A target gives the model a right answer to learn from and a score you can check.",
+        "action": "We predict `{col}`, so that you get a model and a measurable score. Switch to 'I'll pick the target' if you meant a different column.",
+    },
+    "target_auto_none": {
+        "found": "You let the engine decide, and no column looks like an outcome: none is named like status / label / churn / target, and the last column isn't a text category with 2-15 values (number codes such as 1-4 are too ambiguous to guess).",
+        "why": "Guessing a target would mean predicting something nobody asked for. Without a right-answer column, the honest question is what groups exist.",
+        "action": "We look for natural groups instead (clustering), so that you still learn the data's structure. Pick a target yourself if you had one in mind.",
+    },
+    "target_manual": {
+        "found": "You chose `{col}` as the target.{hint}",
+        "why": "You know your business question best, so your choice always wins over the engine's guess.",
+        "action": "We predict `{col}`, so that the whole pipeline answers your question.",
+    },
+    "target_none": {
+        "found": "You chose not to predict anything.",
+        "why": "Without a right-answer column there is nothing to score predictions against, but there is still structure to find.",
+        "action": "We look for natural groups (clustering), so that rows that behave alike are put together.",
+    },
     "task_clustering": {
-        "found": "No target column was chosen.",
+        "found": "There is no target column.",
         "why": "Without a 'right answer' column we can't train a model to predict something - but we can still look for natural groups.",
         "action": "We run clustering, so that rows that look alike are grouped together.",
     },
@@ -139,10 +174,15 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "why": "A class seen once can't appear in both the training and the test set.",
         "action": "We drop those {n_rows} row(s), so that the train/test split works.",
     },
+    "uneven": {
+        "found": "The classes are uneven: the smallest is {min_pct:.1f}% of rows vs {max_pct:.1f}% for the largest.",
+        "why": "Accuracy would flatter a lazy model: one that always guesses the big class is already {max_pct:.0f}% 'accurate' while catching none of the small class.",
+        "action": "We judge every model by **macro F1** (the average F1 over the classes), so that the small class counts as much as the big one.",
+    },
     "imbalanced": {
         "found": "Classes are uneven: the smallest class is {min_pct:.1f}% of rows vs {max_pct:.1f}% for the largest.",
         "why": "A model can score high accuracy by always guessing the big class while ignoring the small one.",
-        "action": "We weight the rare classes more heavily and judge the model by **macro F1**, so that every class counts equally.",
+        "action": "We weight the rare classes more heavily and judge the model by **macro F1**, so that every class counts equally.{extra}",
     },
     "skewed_target": {
         "found": "`{target}` is skewed (skew = {skew:.2f}): a few very large values and many small ones.",
@@ -263,6 +303,21 @@ GLOSSARY: dict[str, str] = {
 }
 
 
+OVERFIT_SMALL, OVERFIT_LARGE = 0.05, 0.15  # train-test gaps: below the first = fine, above the second = overfitting
+
+
+def overfit_verdict(train: float, test: float) -> str:
+    """One sentence on the train/test gap. The generated train cell uses the same thresholds."""
+    gap = train - test
+    if gap > OVERFIT_LARGE:
+        return (f"⚠️ Training score ({train:.2f}) is much higher than test score ({test:.2f}), a gap of {gap:.2f}: a sign of "
+                "**overfitting**. More data, or simpler settings, would help.")
+    if gap > OVERFIT_SMALL:
+        return (f"🟡 Training ({train:.2f}) is somewhat above test ({test:.2f}), a gap of {gap:.2f}: **mild overfitting**. This is "
+                "common for tree ensembles and usually acceptable; the test score is the honest one.")
+    return f"✅ Training ({train:.2f}) and test ({test:.2f}) scores are close, so the model **generalises** well to new rows."
+
+
 def interpret(metrics: dict, target: str | None) -> list[str]:
     """Turn the numbers produced by the generated code into plain sentences."""
     task = metrics.get("task")
@@ -312,11 +367,12 @@ def interpret(metrics: dict, target: str | None) -> list[str]:
         else:
             out.append(f"The baseline scores {base:.2f}, so the model is **clearly learning** something useful.")
 
-    if train is not None and train - test > 0.15:
-        out.append(f"⚠️ Training score ({train:.2f}) is much higher than test score ({test:.2f}) - a sign of **overfitting**. More data or a simpler model would help.")
-    elif train is not None:
-        out.append(f"Training ({train:.2f}) and test ({test:.2f}) scores are close, so the model **generalises** well to new rows.")
+    if train is not None:
+        out.append(overfit_verdict(train, test))
 
+    if "balance_method" in metrics:
+        out.append(f"Class imbalance: **{metrics['balance_method']}** worked best among class weights, oversampling, undersampling "
+                   "and SMOTE.")
     if "tuned_settings" in metrics:
         out.append(f"Tuning (RandomizedSearchCV) set " + ", ".join(f"`{k}={v}`" for k, v in metrics["tuned_settings"].items())
                    + f", giving a cross-validated score of {metrics['tuned_cv']:.3f}.")
