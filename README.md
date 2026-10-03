@@ -128,6 +128,8 @@ Large files are sampled so that the app stays fast: 50k rows for random forests,
 
 [`examples/inn_hotels/`](examples/inn_hotels/) is a full project on 36k hotel bookings. It includes a hand-checked, fully explained notebook (EDA, statsmodels, pruned trees, ensembles, business recommendations) and a comparison with what AutoML produces.
 
+**Presenting this project?** [docs/guide.md](docs/guide.md) is an interview guide with a 60-second pitch, the architecture, feature deep dives with measured results, likely questions with answers, and a 5-minute demo script.
+
 ## Adding a new explanation or rule
 
 1. Add a template to `TEMPLATES` in `automl/narrative.py`, with `found`, `why` and `action`.
