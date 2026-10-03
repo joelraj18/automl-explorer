@@ -1,4 +1,4 @@
-# Interview guide: AutoML Explorer
+# Guide: AutoML Explorer
 
 How to present this project in a data analyst or product analytics interview.
 
